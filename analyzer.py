@@ -28,7 +28,17 @@ class ProductAnalysis(BaseModel):
 
 # 2. Function that sends the image + user goals to Gemini
 def analyze_label(image: Image.Image, selected_goals: list[str], custom_rules: str) -> ProductAnalysis:
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    # Resize large phone photos so upload and token processing happen in <1 second
+    img_copy = image.copy()
+    if img_copy.mode in ("RGBA", "P"):
+        img_copy = img_copy.convert("RGB")
+    img_copy.thumbnail((1024, 1024))
+
+    # Initialize client with a 25-second timeout (in milliseconds) so it never hangs
+    client = genai.Client(
+        api_key=os.environ.get("GEMINI_API_KEY"),
+        http_options=types.HttpOptions(timeout=25000),
+    )
 
     system_prompt = """
     You are NourishLens, a root-cause nutrition and skin health analyst.
@@ -46,9 +56,10 @@ def analyze_label(image: Image.Image, selected_goals: list[str], custom_rules: s
     - Custom Filters/Notes: {custom_rules or 'None'}
     """
 
+    # Use gemini-3.5-flash-lite for fast responses and generous free-tier limits
     response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=[image, user_prompt],
+        model="gemini-3.5-flash-lite",
+        contents=[img_copy, user_prompt],
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
             response_mime_type="application/json",
