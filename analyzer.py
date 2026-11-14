@@ -34,10 +34,10 @@ def analyze_label(image: Image.Image, selected_goals: list[str], custom_rules: s
         img_copy = img_copy.convert("RGB")
     img_copy.thumbnail((1024, 1024))
 
-    # Initialize client with a 25-second timeout (in milliseconds) so it never hangs
+    # 12-second timeout per attempt so a busy model fails over immediately
     client = genai.Client(
         api_key=os.environ.get("GEMINI_API_KEY"),
-        http_options=types.HttpOptions(timeout=25000),
+        http_options=types.HttpOptions(timeout=12000),
     )
 
     system_prompt = """
@@ -45,26 +45,36 @@ def analyze_label(image: Image.Image, selected_goals: list[str], custom_rules: s
     Philosophy:
     - Acne is an internal signal (gut dysbiosis, insulin/IGF-1 spikes, inflammation, nutrient gaps), NOT something solved by rigid food fear.
     - Never use shaming words like 'toxic', 'poison', or 'bad food'. Explain biological pathways calmly.
+    - Thoroughly read EVERY ingredient on the label:
+      * For Acne (Hormonal/Insulin or Gut/Inflammation): Flag dairy/whey/casein (IGF-1/insulin spike), refined sugars/syrups (high glycemic load), and refined omega-6 seed oils (sunflower oil, safflower oil, canola oil, soybean oil, vegetable oil — inflammatory pathways), plus emulsifiers/artificial sweeteners.
+      * For Acne (Topical/Skincare): Flag comedogenic/pore-clogging ingredients (coconut oil, isopropyl myristate, cocoa butter, heavy waxes, pore-clogging esters).
+      * For Bulking: Reward bioavailable protein, healthy fats, and calorie density; do NOT penalize calories or whey unless Acne is also selected.
+      * For Blood Sugar / Weight Loss: Flag added sugars, refined starches, and calorie-dense oils when aligned with the goal.
     - Always look for BOTH potential triggers AND supportive nutrients/ingredients (zinc, omega-3s, fiber, ceramides, protein).
-    - Score 0-100 strictly based on the user's selected goals (e.g., Bulking rewards protein & calories; Hormonal Acne flags whey & high-glycemic sugars; Skincare flags comedogenic oils like coconut oil).
     - Provide an actionable, non-restrictive pairing tip or swap.
     """
 
     user_prompt = f"""
-    Analyze this product label for a user with these active goals:
+    Analyze this product label thoroughly for a user with these active goals:
     - Selected Profiles: {', '.join(selected_goals) if selected_goals else 'General Balanced Wellness'}
     - Custom Filters/Notes: {custom_rules or 'None'}
     """
 
-    # Use gemini-3.5-flash-lite for fast responses and generous free-tier limits
-    response = client.models.generate_content(
-        model="gemini-3.5-flash-lite",
-        contents=[img_copy, user_prompt],
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            response_mime_type="application/json",
-            response_schema=ProductAnalysis,
-        ),
-    )
+    # Try gemini-3.8-flash first (best reasoning), then fail over cleanly if 503 high demand occurs
+    for model_name in ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-3.5-flash-lite"]:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[img_copy, user_prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    response_mime_type="application/json",
+                    response_schema=ProductAnalysis,
+                ),
+            )
+            return ProductAnalysis.model_validate_json(response.text)
+        except Exception as e:
+            print(f"[Fallback] {model_name} unavailable ({e}), trying next...")
+            continue
 
-    return ProductAnalysis.model_validate_json(response.text)
+    raise RuntimeError("All Gemini models are temporarily busy—please click Run again in a few seconds.")
