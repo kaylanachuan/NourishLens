@@ -7,7 +7,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 from PIL import Image
+from pathlib import Path
+
 from analyzer import AnalysisError, analyze_label
+
+# Logo: the leaf image in the project folder. If it's missing, a drawn leaf is used instead.
+LEAF_FILE = Path(__file__).parent / "leaf-removebg-preview.png"
+if LEAF_FILE.exists():
+    LOGO = f'<img src="data:image/png;base64,{base64.b64encode(LEAF_FILE.read_bytes()).decode()}" alt="">'
+else:
+    LOGO = ('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4F6340" stroke-width="2" '
+            'stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14"/>'
+            '<path d="M5 19c3-4 6-7 10-9"/></svg>')
 
 st.set_page_config(page_title="NourishLens", page_icon=":material/eco:", layout="wide")
 
@@ -107,7 +118,8 @@ h3 {{ color: {INK} !important; font-size: 1.7rem !important; font-weight: 400 !i
   backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); }}
 .nl-logo {{ display: flex; align-items: center; gap: 10px; font-weight: 400; font-size: 1.45rem; }}
 .nl-logo-mark {{ width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
-  background: white; font-size: 17px; }}
+  background: transparent; font-size: 17px; }}
+.nl-logo-mark img {{ width: 100%; height: 100%; object-fit: contain; }}
 .nl-links a {{ margin-left: 28px; font-size: .95rem; font-weight: 500; color: {INK} !important; text-decoration: none; opacity: .85; }}
 .nl-links a.nl-cta {{ opacity: 1; margin-left: 28px; padding: 8px 16px; border-radius: 999px; background: {INK}; color: white !important;
   font-size: .9rem; font-weight: 600; text-decoration: none; }}
@@ -218,12 +230,9 @@ button {{ border-radius: 12px !important; }}
 .nl-list li i {{ opacity: .65; }}
 </style>
 <div class="nl-nav">
-  <div class="nl-logo"><div class="nl-logo-mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4F6340" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14"/><path d="M5 19c3-4 6-7 10-9"/></svg></div>NourishLens</div>
-  <div class="nl-links"><a href="#goals" target="_self">How it works</a><a href="#results" target="_self">Results</a>
-    <a class="nl-cta" href="#scan" target="_self">Scan a label</a></div>
+  <div class="nl-logo"><div class="nl-logo-mark">{LOGO}</div>NourishLens</div>
 </div>
 """, unsafe_allow_html=True)
-
 
 def to_b64(img, size=600):
     im = img.convert("RGB").copy()
