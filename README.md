@@ -50,7 +50,3 @@ streamlit run app.py
 
 - `app.py`: Streamlit UI
 - `analyzer.py`: Gemini calls and result models
-
-## Notes
-
-NourishLens is an educational tool, not medical advice.
