@@ -22,7 +22,7 @@ else:
             'stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14"/>'
             '<path d="M5 19c3-4 6-7 10-9"/></svg>')
 
-st.set_page_config(page_title="NourishLens", page_icon=":material/eco:", layout="wide")
+st.set_page_config(page_title="VitalVeil", page_icon=":material/eco:", layout="wide")
 
 # iPhone photos are HEIC. Pillow needs the pillow-heif add-on to open them (pip install pillow-heif).
 # Without it the app still works; uploads are just limited to JPG/PNG/WEBP.
@@ -246,7 +246,7 @@ button {{ border-radius: 12px !important; }}
 .nl-list li i {{ opacity: .65; }}
 </style>
 <div class="nl-nav">
-  <div class="nl-logo"><div class="nl-logo-mark">{LOGO}</div>NourishLens</div>
+  <div class="nl-logo"><div class="nl-logo-mark">{LOGO}</div>VitalVeil</div>
 </div>
 """, unsafe_allow_html=True)
 
