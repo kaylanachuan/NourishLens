@@ -1,16 +1,16 @@
-
 import base64  # NourishLens UI: sage theme, scan animation, tappable ingredients, compare mode
 import html
 import io
 import math
 import os
+from urllib.parse import quote_plus
 from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 from PIL import Image
 from analyzer import AnalysisError, analyze_label
 
-st.set_page_config(page_title="NourishLens", page_icon="🌿", layout="wide")
+st.set_page_config(page_title="NourishLens", page_icon=":material/eco:", layout="wide")
 
 # iPhone photos are HEIC. Pillow needs the pillow-heif add-on to open them (pip install pillow-heif).
 # Without it the app still works; uploads are just limited to JPG/PNG/WEBP.
@@ -186,6 +186,16 @@ button {{ border-radius: 12px !important; }}
 .nl-swap-top {{ font-size: .82rem; opacity: .6; }}
 .nl-swap-look {{ font-weight: 700; color: {ACCENT}; margin-top: 2px; }}
 .nl-swap-why {{ opacity: .75; font-size: .92rem; margin-top: 2px; }}
+.nl-pick {{ border-radius: 16px; padding: 12px 16px; margin-top: 8px; background: rgba(255,255,255,0.85);
+  border-left: 4px solid {GOOD}; line-height: 1.45; }}
+.nl-pick-brand {{ font-size: .78rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; opacity: .55; }}
+.nl-pick-name {{ font-weight: 700; }}
+.nl-pick-why {{ opacity: .75; font-size: .92rem; margin-top: 2px; }}
+.nl-pick-ing {{ margin-top: 6px; }}
+.nl-pick-ing span {{ display: inline-block; font-size: .75rem; font-weight: 600; color: {GOOD}; background: {GOOD_BG};
+  padding: 2px 9px; border-radius: 999px; margin: 2px 4px 0 0; }}
+.nl-pick a {{ font-size: .85rem; font-weight: 600; color: {ACCENT} !important; text-decoration: none; }}
+.nl-pick-note {{ font-size: .8rem; opacity: .55; margin-top: 6px; line-height: 1.4; }}
 .nl-tip {{ border-radius: 16px; padding: 14px 16px; margin-top: 16px; line-height: 1.45;
   background: linear-gradient(135deg, rgba(226,236,216,0.95), rgba(239,243,233,0.95)); }}
 .nl-empty {{ text-align: center; padding: 6px 16px 12px; }}
@@ -206,7 +216,7 @@ button {{ border-radius: 12px !important; }}
 .nl-list li i {{ opacity: .65; }}
 </style>
 <div class="nl-nav">
-  <div class="nl-logo"><div class="nl-logo-mark">🌿</div>NourishLens</div>
+  <div class="nl-logo"><div class="nl-logo-mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4F6340" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14"/><path d="M5 19c3-4 6-7 10-9"/></svg></div>NourishLens</div>
   <div class="nl-links"><a href="#goals" target="_self">How it works</a><a href="#results" target="_self">Results</a>
     <a class="nl-cta" href="#scan" target="_self">Scan a label</a></div>
 </div>
@@ -320,8 +330,28 @@ def swaps_html(r):
     return '<div class="nl-sec">Better matches to look for</div>' + cards
 
 
+def picks_html(picks, category, heading=None):
+    """Named products of the same kind that should suit the user better (skincare only)."""
+    if not picks:
+        return ""
+    kind = e(category or "product")
+    cards = ""
+    for p in picks:
+        search = quote_plus(f"{p.brand} {p.product_name}")
+        ings = "".join(f"<span>{e(i)}</span>" for i in p.key_ingredients[:4])
+        cards += (f'<div class="nl-pick"><div class="nl-pick-brand">{e(p.brand)}</div>'
+                  f'<div class="nl-pick-name">{e(p.product_name)}</div>'
+                  f'<div class="nl-pick-why">{e(p.why_it_fits)}</div>'
+                  + (f'<div class="nl-pick-ing">{ings}</div>' if ings else "")
+                  + f'<a href="https://www.google.com/search?q={search}" target="_blank">Look it up →</a></div>')
+    title = heading or f"{kind.capitalize()}s that may suit you better"
+    return (f'<div class="nl-sec">{title}</div>{cards}'
+            '<div class="nl-pick-note">Suggested by AI from each product\'s usual formula. Formulas change, '
+            'so scan the label before you buy to confirm it\'s a good fit.</div>')
+
+
 def tip_html(r):
-    return f'<div class="nl-tip">💡 <b>Try this:</b> {e(r.non_restrictive_tip)}</div>' if r.non_restrictive_tip else ""
+    return f'<div class="nl-tip"><b>Try this:</b> {e(r.non_restrictive_tip)}</div>' if r.non_restrictive_tip else ""
 
 
 def run_analysis(fn):
@@ -362,7 +392,6 @@ with left:
         st.markdown('<div class="nl-step" id="goals">Step 1</div>', unsafe_allow_html=True)
         st.subheader("What are you working on?", anchor=False)
         focus = st.segmented_control("Focus", ["Food", "Skincare"], default="Food", key="focus",
-                                     format_func=lambda f: {"Food": "🥗  Food", "Skincare": "🧴  Skincare"}[f],
                                      label_visibility="collapsed") or "Food"
         # Both groups are always drawn (the other one is hidden), so your picks survive switching back and forth
         hidden = "skin_box" if focus == "Food" else "food_box"
@@ -393,7 +422,7 @@ with left:
         st.markdown('<div class="nl-step" id="scan">Step 2</div>', unsafe_allow_html=True)
         if mode == "Single scan":
             st.subheader("Scan the ingredient label", anchor=False)
-            up = st.file_uploader("📷  Drop a photo or take one", type=PHOTO_TYPES)
+            up = st.file_uploader("Drop a photo or take one", type=PHOTO_TYPES)
             # The sample button only shows if the sample image is in the project folder
             if os.path.exists(sample_a):
                 st.button(f"No photo handy? Try a {noun} sample →", type="tertiary",
@@ -417,7 +446,7 @@ with left:
             if img_a and img_b:
                 a.image(img_a, **FULL_WIDTH)
                 b.image(img_b, **FULL_WIDTH)
-            if st.button("⇄  Compare", type="primary", **FULL_WIDTH, disabled=not (img_a and img_b)):
+            if st.button("Compare", type="primary", **FULL_WIDTH, disabled=not (img_a and img_b)):
                 st.session_state.run, st.session_state.imgs = "compare", (img_a, img_b)
 
 with right:
@@ -523,7 +552,8 @@ with right:
                 st.markdown(f'<div class="nl-detail" style="border-color:{color}"><div class="nl-detail-title">{e(chosen)}{badge}</div>'
                             f'<div class="nl-detail-body">{body}</div>{extra}</div>', unsafe_allow_html=True)
 
-            st.markdown(swaps_html(r) + tip_html(r), unsafe_allow_html=True)
+            picks = picks_html(r.product_picks, r.product_category) if skin else ""
+            st.markdown(swaps_html(r) + picks + tip_html(r), unsafe_allow_html=True)
 
         elif mode == "Compare two" and cmp:
             ra, rb = cmp
@@ -531,7 +561,7 @@ with right:
             win = None if tie else (0 if ra.alignment_score > rb.alignment_score else 1)
             cols = ""
             for idx, (rr, lab) in enumerate([(ra, "A"), (rb, "B")]):
-                badge = '<div class="nl-win">✓ Better fit for you</div>' if idx == win else ""
+                badge = '<div class="nl-win">Better fit for you</div>' if idx == win else ""
                 cols += (f'<div class="nl-cmp-col {"win" if idx == win else ""}">{badge}'
                          + ring(rr.alignment_score, 130, f"c{idx}")
                          + f'<div class="nl-cmp-name">{lab} · {e(rr.product_name)}</div>'
@@ -561,8 +591,19 @@ with right:
                        f'{len(l.triggers)}, and {len(w.supportive_wins)} ingredients working for you vs '
                        f'{len(l.supportive_wins)}. {win_sentence(w)}</div>')
                 extras = swaps_html(l) + tip_html(w)
+            # Both skincare and neither a great fit: suggest products of the same kind that should be
+            if is_skincare(ra) and is_skincare(rb) and max(ra.alignment_score, rb.alignment_score) < 70:
+                seen, merged = set(), []
+                for p in ra.product_picks + rb.product_picks:
+                    key = _norm(f"{p.brand} {p.product_name}")
+                    if key not in seen and _norm(p.product_name) not in (_norm(ra.product_name), _norm(rb.product_name)):
+                        seen.add(key)
+                        merged.append(p)
+                kind = ra.product_category or rb.product_category or "product"
+                extras = picks_html(merged[:3], kind, f"Neither is a great fit. {e(kind).capitalize()}s that may suit you better") + extras
             st.markdown(f'<div class="nl-cmp">{cols}</div>{notes}{why}{extras}', unsafe_allow_html=True)
         else:
             hint = "Add two labels, then tap Compare." if mode == "Compare two" else "Set your goals, add a label, then tap Analyze."
             st.markdown(ring(None, 170) + f'<div class="nl-empty" style="margin-top:14px"><b>Your results will appear here</b><br>'
                         f'<span style="opacity:.6">{hint}</span></div>', unsafe_allow_html=True)
+            

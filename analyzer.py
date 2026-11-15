@@ -103,10 +103,19 @@ class Swap(BaseModel):
     why: str = Field(description="One sentence on why this fits the user's profile")
 
 
+class ProductPick(BaseModel):
+    brand: str = Field(description="Brand name exactly as sold, e.g. 'La Roche-Posay'")
+    product_name: str = Field(description="Product name exactly as sold, e.g. 'Toleriane Double Repair Face Moisturizer'")
+    why_it_fits: str = Field(description="One sentence on why its usual formula suits this user's skin profile")
+    key_ingredients: list[str] = Field(description="2 to 4 standout ingredients from its usual formula")
+
+
 class ProductAnalysis(BaseModel):
     product_name: str = Field(description="Short product name from the package, e.g. 'Chocolate Peanut Protein Bar'. "
                                           "If not visible, describe the product in 2-4 words")
     product_type: str = Field(description="Exactly 'Food/Beverage' or 'Skincare/Cosmetic'")
+    product_category: str = Field(description="Specific kind of product in lowercase, e.g. 'moisturizer', 'sunscreen', "
+                                              "'cleanser', 'serum', 'protein bar', 'granola'")
     all_ingredients: list[str] = Field(description="Every ingredient on the label, in label order, using short clean "
                                                    "names, no duplicates")
     alignment_score: int = Field(description="0 to 100 score for the profile that matches the product type")
@@ -114,6 +123,9 @@ class ProductAnalysis(BaseModel):
     triggers: list[IngredientFlag]
     supportive_wins: list[SupportiveWin]
     swaps: list[Swap] = Field(description="1 to 3 swaps tailored to the user's profile; empty if already a great fit")
+    product_picks: list[ProductPick] = Field(description="Skincare scoring below 70 only: 2 to 3 real products of the "
+                                                         "SAME category likely to score 70+ for this user. Empty for "
+                                                         "food or when the score is 70 or higher")
     non_restrictive_tip: str = Field(description="Practical pairing, layering or usage tip without fear-mongering")
 
 
@@ -143,7 +155,12 @@ Steps:
    health (skincare). Custom filters apply to both.
 4. Look for BOTH triggers and supportive ingredients.
 5. Suggest swaps as ingredient profiles to look for (e.g. "a zinc oxide mineral sunscreen with an oil-free gel
-   base"), tailored to the user's profile. Never name brands or specific products.
+   base"), tailored to the user's profile. Swaps never name brands; named products go only in product_picks.
+6. Product picks (skincare scoring below 70 only): name 2 to 3 real products of the SAME category (a moisturizer
+   gets moisturizer picks) whose usual formula would likely score 70 or higher for this user's skin type and
+   concerns, judged by the same guidance below. Only name long-established products widely sold at Sephora, Ulta
+   or drugstores that you are confident exist, using their exact brand and product names. Never invent a product
+   or guess at a name; if you are unsure, give fewer picks or none. Never pick the scanned product itself.
 
 {_section("FOOD GOALS", FOOD_GUIDE)}
 
