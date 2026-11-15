@@ -1,4 +1,4 @@
-# 🌿 NourishLens
+# 🌿 VitalVeil
 
 Snap any food or skincare label and see how every ingredient fits your goals.
 
