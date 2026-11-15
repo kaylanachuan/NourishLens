@@ -5,6 +5,12 @@ import math
 import streamlit as st
 from PIL import Image
 from analyzer import analyze_label
+from pathlib import Path
+
+def img_to_data_uri(path):
+    data = base64.b64encode(Path(path).read_bytes()).decode()
+    return f'data:image/png;base64,{data}'
+LEAF = img_to_data_uri(Path(__file__).parent/'leaf-removebg-preview.png')
 
 st.set_page_config(page_title="NourishLens", page_icon="🌿", layout="wide")
 
@@ -70,7 +76,7 @@ h3 {{ color: {INK} !important; font-size: 1.7rem !important; font-weight: 400 !i
   backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); }}
 .nl-logo {{ display: flex; align-items: center; gap: 10px; font-weight: 400; font-size: 1.45rem; }}
 .nl-logo-mark {{ width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
-  background: white; font-size: 17px; }}
+  background: transparent; font-size: 17px; }}
 .nl-links a {{ margin-left: 28px; font-size: .95rem; font-weight: 500; color: {INK} !important; text-decoration: none; opacity: .85; }}
 .nl-links a.nl-cta {{ opacity: 1; margin-left: 28px; padding: 8px 16px; border-radius: 999px; background: {INK}; color: white !important;
   font-size: .9rem; font-weight: 600; text-decoration: none; }}
@@ -185,12 +191,11 @@ button {{ border-radius: 12px !important; }}
 .nl-list li i {{ opacity: .65; }}
 </style>
 <div class="nl-nav">
-  <div class="nl-logo"><div class="nl-logo-mark">🌿</div>NourishLens</div>
+  <div class="nl-logo"><div class="nl-logo-mark"><img src="{LEAF}"></div>NourishLens</div>
   <div class="nl-links"><a href="#goals" target="_self">How it works</a><a href="#results" target="_self">Results</a>
     <a class="nl-cta" href="#scan" target="_self">Scan a label</a></div>
 </div>
 """, unsafe_allow_html=True)
-
 
 def to_b64(img, size=600):
     im = img.convert("RGB").copy()
@@ -296,7 +301,7 @@ with left:
     with st.container(key="card_goals"):
         st.markdown('<div class="nl-step" id="goals">Step 1</div>', unsafe_allow_html=True)
         st.subheader("What are you working on?", anchor=False)
-        food_tab, skin_tab = st.tabs(["🥗  Food goals", "🧴  Skin profile"])
+        food_tab, skin_tab = st.tabs(["  Food goals", "  Skin profile"])
         with food_tab:
             picked = st.pills("Food goals", list(FOOD_GOALS), selection_mode="multi", default=["Hormonal acne"],
                               label_visibility="collapsed") or []
