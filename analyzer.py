@@ -192,7 +192,7 @@ def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional
         raise AnalysisError("No Gemini API key found. Add GEMINI_API_KEY=... to the .env file, then restart the app.")
 
     # 12-second timeout per attempt so a busy model fails over quickly
-    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=12000))
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=45000))
 
     user_prompt = f"""
     Analyze this product label for a user with this profile:
