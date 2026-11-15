@@ -315,6 +315,22 @@ def is_skincare(r):
     return "skin" in t or "cosmetic" in t
 
 
+def kind_of(r):
+    """What kind of product this is, e.g. 'sunscreen' or 'protein bar'."""
+    kind = _norm(r.product_category or "")
+    return kind[:-1] if kind.endswith("s") and not kind.endswith("ss") else kind  # "sunscreens" -> "sunscreen"
+
+
+def mismatch_reason(ra, rb):
+    """Why two products shouldn't be ranked against each other, or '' if the comparison is fair."""
+    if is_skincare(ra) != is_skincare(rb):
+        return "one is food and one is skincare, so each was scored against a different part of your profile"
+    if is_skincare(ra) and kind_of(ra) and kind_of(rb) and kind_of(ra) != kind_of(rb):
+        return (f"they're different kinds of skincare (a {e(kind_of(ra))} and a {e(kind_of(rb))}), "
+                f"which do different jobs on your skin")
+    return ""
+
+
 def scored_for(profile, skin):
     """What the score was measured against, e.g. 'Dry skin, Sensitive' or 'Hormonal acne, Blood sugar'."""
     if skin:
@@ -494,7 +510,8 @@ with right:
             st.markdown(
                 f'<div class="nl-product"><img src="{st.session_state.thumb}"><div>'
                 f'<div class="nl-product-name">{e(r.product_name)}</div>'
-                f'<div class="nl-product-meta">{e(r.product_type)} · {len(ingredients)} ingredients</div>'
+                f'<div class="nl-product-meta">{e(r.product_type)} · {e(kind_of(r).capitalize() or "Product")} · '
+                f'{len(ingredients)} ingredient{"" if len(ingredients) == 1 else "s"}</div>'
                 f'{scored_chip}</div></div>'
                 + (f'<div class="nl-hint">{hint}</div>' if hint else '')
                 + '<div style="height:18px"></div>'
@@ -542,29 +559,33 @@ with right:
 
         elif mode == "Compare two" and cmp:
             ra, rb = cmp
+            # Only rank products of the same kind: a sunscreen and a moisturizer do different jobs
+            reason = mismatch_reason(ra, rb)
             tie = ra.alignment_score == rb.alignment_score
-            win = None if tie else (0 if ra.alignment_score > rb.alignment_score else 1)
+            win = None if (tie or reason) else (0 if ra.alignment_score > rb.alignment_score else 1)
             cols = ""
             for idx, (rr, lab) in enumerate([(ra, "A"), (rb, "B")]):
                 badge = '<div class="nl-win">Better fit for you</div>' if idx == win else ""
                 cols += (f'<div class="nl-cmp-col {"win" if idx == win else ""}">{badge}'
                          + ring(rr.alignment_score, 130, f"c{idx}")
                          + f'<div class="nl-cmp-name">{lab} · {e(rr.product_name)}</div>'
-                           f'<div class="nl-cmp-type">{e(rr.product_type)}</div>'
+                           f'<div class="nl-cmp-type">{e(rr.product_type)} · {e(kind_of(rr).capitalize() or "Product")}</div>'
                            f'<div class="nl-cmp-row" style="color:{WARN}">● {len(rr.triggers)} worth knowing</div>'
                            f'<div class="nl-cmp-row" style="color:{GOOD}">● {len(rr.supportive_wins)} working for you</div>'
                          + pros_cons(rr) + '</div>')
 
             notes = ""
-            if is_skincare(ra) != is_skincare(rb):
-                notes += ('<div class="nl-hint">Heads up: one of these is food and one is skincare, so each was scored '
-                          'against a different part of your profile. Compare two of the same kind for a fairer match-up.</div>')
             cmp_prof = st.session_state.get("cmp_profile")
             if cmp_prof and cmp_prof != profile:
                 notes += ('<div class="nl-hint">Your goals have changed since this comparison. '
                           'Tap <b>Compare</b> again to update it.</div>')
 
-            if tie:
+            if reason:
+                why = (f'<div class="nl-why"><b>These two can\'t be ranked against each other:</b> {reason}. '
+                       f'Each score still shows how well that product fits you on its own. To find the better pick, '
+                       f'compare two of the same kind, like two moisturizers or two sunscreens.</div>')
+                extras = ""
+            elif tie:
                 why = (f'<div class="nl-why"><b>It\'s a tie at {ra.alignment_score}.</b> {e(ra.product_name)} has '
                        f'{len(ra.triggers)} flagged and {len(ra.supportive_wins)} working for you; {e(rb.product_name)} has '
                        f'{len(rb.triggers)} flagged and {len(rb.supportive_wins)} working for you. '

@@ -107,6 +107,10 @@ class ProductAnalysis(BaseModel):
     product_name: str = Field(description="Short product name from the package, e.g. 'Chocolate Peanut Protein Bar'. "
                                           "If not visible, describe the product in 2-4 words")
     product_type: str = Field(description="Exactly 'Food/Beverage' or 'Skincare/Cosmetic'")
+    product_category: str = Field(description="The specific kind of product, lowercase and singular, using the most "
+                                              "common name: e.g. 'moisturizer', 'sunscreen', 'cleanser', 'serum', "
+                                              "'toner', 'protein bar', 'granola', 'yogurt'. A moisturizer with SPF "
+                                              "counts as 'sunscreen'")
     all_ingredients: list[str] = Field(description="Every ingredient on the label, in label order, using short clean "
                                                    "names, no duplicates. Include BOTH the Active and the Inactive "
                                                    "ingredients when the label has both sections")
@@ -141,7 +145,8 @@ Philosophy:
 - Ingredients are listed roughly by amount, so those near the top matter more than trace ingredients at the end.
 
 Steps:
-1. Decide product_type: 'Food/Beverage' or 'Skincare/Cosmetic'.
+1. Decide product_type ('Food/Beverage' or 'Skincare/Cosmetic') and product_category (the specific kind of
+   product, e.g. 'moisturizer' or 'sunscreen'), using the packaging and the ingredients.
 2. List EVERY ingredient in all_ingredients, then use those exact names in triggers and supportive_wins.
    Sunscreens and many skincare products split the list into "Active ingredients" and "Inactive ingredients";
    read and include both. If part of the list is unreadable, say so in unread_note.
