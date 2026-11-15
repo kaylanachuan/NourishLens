@@ -2,8 +2,8 @@ import os
 from typing import Optional
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
-from pydantic import BaseModel, Field
+from google.genai import errors, types
+from pydantic import BaseModel, Field, ValidationError
 from PIL import Image
 
 # Load GEMINI_API_KEY from your .env file
@@ -157,6 +157,14 @@ Steps:
 # 4. Send the image + profile to Gemini
 # ---------------------------------------------------------------------------
 
+# Try the stronger model first, then fall back if it's busy or unavailable
+MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+
+
+class AnalysisError(Exception):
+    """A problem worth showing the user as-is (bad key, models busy, unreadable answer)."""
+
+
 def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional[str],
                   skin_concerns: list[str], custom_rules: str) -> ProductAnalysis:
     # Resize large phone photos so uploads stay fast
@@ -165,11 +173,12 @@ def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional
         img_copy = img_copy.convert("RGB")
     img_copy.thumbnail((1024, 1024))
 
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise AnalysisError("No Gemini API key found. Add GEMINI_API_KEY=... to the .env file, then restart the app.")
+
     # 12-second timeout per attempt so a busy model fails over quickly
-    client = genai.Client(
-        api_key=os.environ.get("GEMINI_API_KEY"),
-        http_options=types.HttpOptions(timeout=12000),
-    )
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=12000))
 
     user_prompt = f"""
     Analyze this product label for a user with this profile:
@@ -179,8 +188,7 @@ def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional
     - Custom filters/notes: {custom_rules or 'None'}
     """
 
-    # Try the stronger model first, then fall back if it's busy
-    for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+    for model_name in MODELS:
         try:
             response = client.models.generate_content(
                 model=model_name,
@@ -192,8 +200,15 @@ def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional
                 ),
             )
             return ProductAnalysis.model_validate_json(response.text)
-        except Exception as e:
-            print(f"[Fallback] {model_name} unavailable ({e}), trying next...")
-            continue
+        except errors.APIError as e:
+            # A bad or unauthorized key fails the same way on every model, so stop instead of retrying
+            if e.code in (400, 401, 403) and "model" not in str(e).lower():
+                raise AnalysisError(f"Gemini rejected the request ({e.code}). Check the API key in your .env file.") from e
+            print(f"[Fallback] {model_name} failed ({e.code}: {e}), trying next...")
+        except ValidationError as e:
+            print(f"[Fallback] {model_name} returned an incomplete answer ({e.error_count()} problems), trying next...")
+        except Exception as e:  # timeouts, network hiccups
+            print(f"[Fallback] {model_name} unavailable ({type(e).__name__}: {e}), trying next...")
 
-    raise RuntimeError("All Gemini models are temporarily busy—please click Analyze again in a few seconds.")
+    raise AnalysisError("Gemini is busy or unreachable right now. Click Analyze again in a few seconds. "
+                        "(The terminal shows the exact error.)")

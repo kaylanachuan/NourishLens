@@ -1,16 +1,30 @@
 import base64  # NourishLens UI: sage theme, scan animation, tappable ingredients, compare mode
+import html
 import io
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 from PIL import Image
-from analyzer import analyze_label
+from analyzer import AnalysisError, analyze_label
 
 st.set_page_config(page_title="NourishLens", page_icon="🌿", layout="wide")
 
+# Sample labels for people without a photo. The Food / Skincare switch in Step 1 picks which pair is used.
+SAMPLES = {
+    "Food": ("sample_food.png", "sample_food_2.png"),
+    "Skincare": ("sample_skin.png", "sample_skin_2.png"),
+}
+# Filled in when someone tries a skincare sample without setting a skin profile, so the score is personal
+DEMO_SKIN_TYPE, DEMO_SKIN_CONCERNS = "Oily", ["Acne-prone"]
+
+# Newer Streamlit uses width="stretch"; older versions (like on Python 3.9) use use_container_width=True
+_ST_VERSION = tuple(int(x) for x in st.__version__.split(".")[:2] if x.isdigit())
+FULL_WIDTH = {"width": "stretch"} if _ST_VERSION >= (1, 50) else {"use_container_width": True}
+
 INK = "#1F2A18"
 SAGE = "#9CAF88"
-SAGE_LIGHT = "#E3EADB"
 ACCENT = "#4F6340"  # dark sage
 WARN, WARN_BG = "#C2621A", "#FDE8D7"
 GOOD, GOOD_BG = "#4F6340", "#E2ECD8"
@@ -83,7 +97,7 @@ h3 {{ color: {INK} !important; font-size: 1.7rem !important; font-weight: 400 !i
 .nl-step {{ font-size: .76rem; font-weight: 700; letter-spacing: .08em; color: {ACCENT}; text-transform: uppercase; }}
 
 /* iOS-style segmented control */
-[role="radiogroup"][aria-label="Mode"] {{
+[role="radiogroup"][aria-label="Mode"], [role="radiogroup"][aria-label="Focus"] {{
   background: rgba(255,255,255,0.45); padding: 4px; border-radius: 14px; gap: 2px; display: inline-flex;
   border: 1px solid rgba(255,255,255,0.8); }}
 button[data-variant="segmented_control"] {{ border: none !important; background: transparent !important;
@@ -91,11 +105,7 @@ button[data-variant="segmented_control"] {{ border: none !important; background:
 button[data-variant="segmented_control"][aria-checked="true"] {{ background: white !important; color: {INK} !important;
   box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
 
-/* Food / Skin tabs */
-.stTabs [data-baseweb="tab-list"] {{ gap: 18px; }}
-.stTabs [data-baseweb="tab"] p {{ font-weight: 600; font-size: 1rem; }}
-.stTabs [aria-selected="true"] p {{ color: {ACCENT} !important; }}
-.stTabs [data-baseweb="tab-highlight"] {{ background-color: {ACCENT} !important; }}
+/* Food / Skincare switch */
 .nl-mini {{ font-size: .74rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; opacity: .5; margin: 4px 0 -4px; }}
 .nl-route {{ font-size: .85rem; opacity: .6; margin-top: 10px; line-height: 1.4; }}
 
@@ -227,17 +237,34 @@ def scanning(img, text="Reading the label…"):
             f'<div class="nl-scan-text">{text}</div>')
 
 
-def same(a, b):
-    a, b = a.lower().strip(), b.lower().strip()
-    return a == b or a in b or b in a
+def e(text):
+    """Escape AI-written text before it goes into HTML, so a stray < or & can't break the layout."""
+    return html.escape(str(text or ""))
 
 
-def kind_of(r, name):
-    if any(same(t.ingredient, name) for t in r.triggers):
-        return "warn"
-    if any(same(w.ingredient, name) for w in r.supportive_wins):
-        return "good"
-    return "neutral"
+def _norm(s):
+    return " ".join(str(s).lower().replace("*", " ").split()).strip(" .,;:")
+
+
+def match_ingredients(ingredients, items):
+    """Pair each flag/win with the ONE ingredient it refers to: exact names first, then the closest
+    partial match. This stops a flag on 'Oil' from coloring 'Sunflower Oil' and 'Coconut Oil' at once."""
+    found, leftovers = {}, []
+    by_norm = {_norm(n): n for n in ingredients}
+    for it in items:
+        name = by_norm.get(_norm(it.ingredient))
+        if name and name not in found:
+            found[name] = it
+        else:
+            leftovers.append(it)
+    for it in leftovers:
+        key = _norm(it.ingredient)
+        if not key:
+            continue
+        options = [n for n in ingredients if n not in found and (key in _norm(n) or _norm(n) in key)]
+        if options:
+            found[min(options, key=lambda n: abs(len(_norm(n)) - len(key)))] = it
+    return found
 
 
 def win_sentence(w):
@@ -245,16 +272,16 @@ def win_sentence(w):
     if not w.supportive_wins or not w.supportive_wins[0].benefit:
         return ""
     top = w.supportive_wins[0]
-    return f'{top.ingredient} adds {top.benefit[0].lower() + top.benefit[1:]}'
+    return f'{e(top.ingredient)} adds {e(top.benefit[0].lower() + top.benefit[1:])}'
 
 
 def pros_cons(rr):
     """Two short lists for a compare column: what's flagged (and who it matters for) and what's working."""
-    bad = "".join(f'<li><b>{t.ingredient}</b>: {t.explanation}'
-                  + (f' <i>Matters most for {t.matters_most_for}.</i>' if t.matters_most_for else "")
+    bad = "".join(f'<li><b>{e(t.ingredient)}</b>: {e(t.explanation)}'
+                  + (f' <i>Matters most for {e(t.matters_most_for)}.</i>' if t.matters_most_for else "")
                   + '</li>' for t in rr.triggers) \
         or '<li style="opacity:.6">Nothing flagged</li>'
-    good = "".join(f'<li><b>{w.ingredient}</b>: {w.benefit}</li>' for w in rr.supportive_wins) \
+    good = "".join(f'<li><b>{e(w.ingredient)}</b>: {e(w.benefit)}</li>' for w in rr.supportive_wins) \
         or '<li style="opacity:.6">Nothing standout</li>'
     return (f'<div class="nl-list"><div style="color:{WARN}"><b>Worth knowing</b></div><ul>{bad}</ul>'
             f'<div style="color:{GOOD}"><b>Working for you</b></div><ul>{good}</ul></div>')
@@ -276,10 +303,37 @@ def scored_for(profile, skin):
 def swaps_html(r):
     if not r.swaps:
         return ""
-    cards = "".join(f'<div class="nl-swap"><div class="nl-swap-top">Instead of {s.instead_of}</div>'
-                    f'<div class="nl-swap-look">→ {s.look_for}</div><div class="nl-swap-why">{s.why}</div></div>'
+    cards = "".join(f'<div class="nl-swap"><div class="nl-swap-top">Instead of {e(s.instead_of)}</div>'
+                    f'<div class="nl-swap-look">→ {e(s.look_for)}</div><div class="nl-swap-why">{e(s.why)}</div></div>'
                     for s in r.swaps)
     return '<div class="nl-sec">Better matches to look for</div>' + cards
+
+
+def tip_html(r):
+    return f'<div class="nl-tip">💡 <b>Try this:</b> {e(r.non_restrictive_tip)}</div>' if r.non_restrictive_tip else ""
+
+
+def run_analysis(fn):
+    """Run an analysis and show a clear message if it fails. Returns True on success."""
+    try:
+        fn()
+        return True
+    except AnalysisError as err:
+        st.error(str(err))
+    except Exception as err:
+        print(f"[NourishLens] Unexpected error: {type(err).__name__}: {err}")
+        st.error("Something went wrong reading this label. Try again, or use a sharper photo.")
+    return False
+
+
+def use_sample(flag, focus):
+    """Runs when a sample button is clicked (before the page redraws)."""
+    st.session_state[flag] = True
+    # A skincare sample with no skin profile would only get a generic score, so fill in a demo profile.
+    # It shows up as selected chips, so it's clear what happened and easy to change.
+    if focus == "Skincare" and not st.session_state.get("skin_type") and not st.session_state.get("skin_concerns"):
+        st.session_state.skin_type = DEMO_SKIN_TYPE
+        st.session_state.skin_concerns = list(DEMO_SKIN_CONCERNS)
 
 
 # ---------- Hero ----------
@@ -296,50 +350,63 @@ with left:
     with st.container(key="card_goals"):
         st.markdown('<div class="nl-step" id="goals">Step 1</div>', unsafe_allow_html=True)
         st.subheader("What are you working on?", anchor=False)
-        food_tab, skin_tab = st.tabs(["🥗  Food goals", "🧴  Skin profile"])
-        with food_tab:
+        focus = st.segmented_control("Focus", ["Food", "Skincare"], default="Food", key="focus",
+                                     format_func=lambda f: {"Food": "🥗  Food", "Skincare": "🧴  Skincare"}[f],
+                                     label_visibility="collapsed") or "Food"
+        # Both groups are always drawn (the other one is hidden), so your picks survive switching back and forth
+        hidden = "skin_box" if focus == "Food" else "food_box"
+        st.markdown(f"<style>.st-key-{hidden} {{ display: none; }}</style>", unsafe_allow_html=True)
+        with st.container(key="food_box"):
             picked = st.pills("Food goals", list(FOOD_GOALS), selection_mode="multi", default=["Hormonal acne"],
-                              label_visibility="collapsed") or []
-        with skin_tab:
+                              key="food_goals", label_visibility="collapsed") or []
+        with st.container(key="skin_box"):
             st.markdown('<div class="nl-mini">Skin type</div>', unsafe_allow_html=True)
-            skin_type = st.pills("Skin type", SKIN_TYPES, selection_mode="single", label_visibility="collapsed")
+            skin_type = st.pills("Skin type", SKIN_TYPES, selection_mode="single", key="skin_type",
+                                 label_visibility="collapsed")
             st.markdown('<div class="nl-mini">Concerns</div>', unsafe_allow_html=True)
-            skin_concerns = st.pills("Skin concerns", SKIN_CONCERNS, selection_mode="multi",
+            skin_concerns = st.pills("Skin concerns", SKIN_CONCERNS, selection_mode="multi", key="skin_concerns",
                                      label_visibility="collapsed") or []
-        st.markdown('<div class="nl-route">Food is scored against your food goals, skincare against your skin profile. '
-                    'NourishLens figures out which one it is from the label.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="nl-route">Set up both if you like. Whatever you scan, NourishLens tells food from skincare '
+                    'and scores it against the matching profile. This switch also picks which sample labels you see.</div>',
+                    unsafe_allow_html=True)
         with st.expander("Add custom filters"):
             custom_rules = st.text_input("Anything specific to flag", placeholder="e.g. whey, coconut oil, fragrance")
 
         food_goals = [FOOD_GOALS[p] for p in picked]
         profile = {"food": list(picked), "skin_type": skin_type, "concerns": list(skin_concerns)}
 
+    sample_a, sample_b = SAMPLES[focus]
+    noun = "food" if focus == "Food" else "skincare"
+
     with st.container(key="card_label"):
         st.markdown('<div class="nl-step" id="scan">Step 2</div>', unsafe_allow_html=True)
         if mode == "Single scan":
             st.subheader("Scan the ingredient label", anchor=False)
             up = st.file_uploader("📷  Drop a photo or take one", type=["jpg", "jpeg", "png", "webp"])
-            if st.button("No photo handy? Try a sample label →", type="tertiary"):
-                st.session_state.sample = True
-            img = Image.open(up) if up else (Image.open("sample_label.png") if st.session_state.get("sample") else None)
+            # The sample button only shows if the sample image is in the project folder
+            if os.path.exists(sample_a):
+                st.button(f"No photo handy? Try a {noun} sample →", type="tertiary",
+                          on_click=use_sample, args=("sample", focus))
+            img = Image.open(up) if up else (Image.open(sample_a) if st.session_state.get("sample") else None)
             if img:
                 st.image(img, width=170)
-            if st.button("Analyze Label", type="primary", use_container_width=True, disabled=img is None):
+            if st.button("Analyze Label", type="primary", **FULL_WIDTH, disabled=img is None):
                 st.session_state.run, st.session_state.img = "single", img
         else:
             st.subheader("Compare two products", anchor=False)
             a, b = st.columns(2)
             up_a = a.file_uploader("Product A", type=["jpg", "jpeg", "png", "webp"])
             up_b = b.file_uploader("Product B", type=["jpg", "jpeg", "png", "webp"])
-            if st.button("No photos handy? Try two sample labels →", type="tertiary"):
-                st.session_state.sample2 = True
+            if os.path.exists(sample_a) and os.path.exists(sample_b):
+                st.button(f"No photos handy? Compare two {noun} samples →", type="tertiary",
+                          on_click=use_sample, args=("sample2", focus))
             s2 = st.session_state.get("sample2")
-            img_a = Image.open(up_a) if up_a else (Image.open("sample_label.png") if s2 else None)
-            img_b = Image.open(up_b) if up_b else (Image.open("sample_label_2.png") if s2 else None)
+            img_a = Image.open(up_a) if up_a else (Image.open(sample_a) if s2 else None)
+            img_b = Image.open(up_b) if up_b else (Image.open(sample_b) if s2 else None)
             if img_a and img_b:
-                a.image(img_a, use_container_width=True)
-                b.image(img_b, use_container_width=True)
-            if st.button("⇄  Compare", type="primary", use_container_width=True, disabled=not (img_a and img_b)):
+                a.image(img_a, **FULL_WIDTH)
+                b.image(img_b, **FULL_WIDTH)
+            if st.button("⇄  Compare", type="primary", **FULL_WIDTH, disabled=not (img_a and img_b)):
                 st.session_state.run, st.session_state.imgs = "compare", (img_a, img_b)
 
 with right:
@@ -351,23 +418,26 @@ with right:
         if run == "single":
             ph = st.empty()
             ph.markdown(scanning(st.session_state.img, "Reading the ingredients…"), unsafe_allow_html=True)
-            try:
+
+            def _single():
                 st.session_state.result = analyze_label(st.session_state.img, *args)
                 st.session_state.thumb = to_b64(st.session_state.img, 160)
                 st.session_state.result_profile = profile  # remember what this result was scored for
-            except Exception:
-                st.error("Couldn't analyze this label. Try again, or use a sharper photo.")
+            run_analysis(_single)
             ph.empty()
         elif run == "compare":
             ph = st.empty()
             ia, ib = st.session_state.imgs
             ph.markdown(f'<div style="display:flex;gap:12px">{scanning(ia, "Reading A…")}{scanning(ib, "Reading B…")}</div>',
                         unsafe_allow_html=True)
-            try:
-                st.session_state.cmp = (analyze_label(ia, *args), analyze_label(ib, *args))
+
+            def _compare():
+                # Read both labels at the same time instead of one after the other
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    fa, fb = pool.submit(analyze_label, ia, *args), pool.submit(analyze_label, ib, *args)
+                    st.session_state.cmp = (fa.result(), fb.result())
                 st.session_state.cmp_profile = profile
-            except Exception:
-                st.error("Couldn't analyze these labels. Try again, or use sharper photos.")
+            run_analysis(_compare)
             ph.empty()
 
         r = st.session_state.get("result")
@@ -379,24 +449,31 @@ with right:
             target = scored_for(prof, skin)
 
             # Remove duplicate ingredient names (duplicates would break the tappable tags)
-            ingredients = list(dict.fromkeys(i for i in r.all_ingredients if i.strip()))
-            kinds = {name: kind_of(r, name) for name in ingredients}
+            ingredients = list(dict.fromkeys(i.strip() for i in r.all_ingredients if i.strip()))
+            flags = match_ingredients(ingredients, r.triggers)
+            wins = match_ingredients([n for n in ingredients if n not in flags], r.supportive_wins)
+            kinds = {n: "warn" if n in flags else "good" if n in wins else "neutral" for n in ingredients}
             n_neutral = sum(1 for k in kinds.values() if k == "neutral")
 
-            scored_chip = (f'<div class="nl-scored">Scored for: {target}</div>' if target else
+            scored_chip = (f'<div class="nl-scored">Scored for: {e(target)}</div>' if target else
                            f'<div class="nl-scored">Scored for: general {"skin health" if skin else "wellness"}</div>')
+            if not target:
+                hint = (f'Want a personal score? Set your '
+                        f'{"skin type and concerns under <b>Skin profile</b>" if skin else "<b>Food goals</b>"} '
+                        f'in Step 1, then analyze again.')
+            elif scored_for(profile, skin) != target:
+                hint = "Your goals have changed since this scan. Tap <b>Analyze Label</b> again to update the score."
+            else:
+                hint = ""
             st.markdown(
                 f'<div class="nl-product"><img src="{st.session_state.thumb}"><div>'
-                f'<div class="nl-product-name">{r.product_name}</div>'
-                f'<div class="nl-product-meta">{r.product_type} · {len(ingredients)} ingredients</div>'
+                f'<div class="nl-product-name">{e(r.product_name)}</div>'
+                f'<div class="nl-product-meta">{e(r.product_type)} · {len(ingredients)} ingredients</div>'
                 f'{scored_chip}</div></div>'
-                + ('' if target else
-                   f'<div class="nl-hint">Want a personal score? Set your '
-                   f'{"skin type and concerns under <b>Skin profile</b>" if skin else "<b>Food goals</b>"} '
-                   f'in Step 1, then analyze again.</div>')
+                + (f'<div class="nl-hint">{hint}</div>' if hint else '')
                 + '<div style="height:18px"></div>'
                 + ring(r.alignment_score, 180, "single")
-                + f'<div class="nl-status">{status(r.alignment_score)}</div><div class="nl-verdict">{r.verdict_headline}</div>'
+                + f'<div class="nl-status">{status(r.alignment_score)}</div><div class="nl-verdict">{e(r.verdict_headline)}</div>'
                 + f'<div class="nl-stats">'
                   f'<div style="background:{WARN_BG};color:{WARN}"><b>{len(r.triggers)}</b><span>Worth knowing</span></div>'
                   f'<div style="background:{GOOD_BG};color:{GOOD}"><b>{len(r.supportive_wins)}</b><span>Working for you</span></div>'
@@ -421,50 +498,59 @@ with right:
                 chosen = st.pills("Ingredients", ingredients, default=first_flag, label_visibility="collapsed")
 
             if chosen:
-                k = kinds.get(chosen, "neutral")
                 extra = ""
-                if k == "warn":
-                    t = next(t for t in r.triggers if same(t.ingredient, chosen))
-                    color, badge, body = WARN, f'<span class="nl-badge" style="background:{WARN_BG};color:{WARN}">{t.pathway}</span>', t.explanation
+                if chosen in flags:
+                    t = flags[chosen]
+                    color, badge, body = WARN, f'<span class="nl-badge" style="background:{WARN_BG};color:{WARN}">{e(t.pathway)}</span>', e(t.explanation)
                     if t.matters_most_for:
-                        extra = f'<div class="nl-detail-for"><b>Matters most for:</b> {t.matters_most_for}</div>'
-                elif k == "good":
-                    w = next(w for w in r.supportive_wins if same(w.ingredient, chosen))
-                    color, badge, body = GOOD, f'<span class="nl-badge" style="background:{GOOD_BG};color:{GOOD}">Supports you</span>', w.benefit
+                        extra = f'<div class="nl-detail-for"><b>Matters most for:</b> {e(t.matters_most_for)}</div>'
+                elif chosen in wins:
+                    w = wins[chosen]
+                    color, badge, body = GOOD, f'<span class="nl-badge" style="background:{GOOD_BG};color:{GOOD}">Supports you</span>', e(w.benefit)
                 else:
                     color, badge, body = "#B9B9BE", "", "Nothing to note for your goals."
-                st.markdown(f'<div class="nl-detail" style="border-color:{color}"><div class="nl-detail-title">{chosen}{badge}</div>'
+                st.markdown(f'<div class="nl-detail" style="border-color:{color}"><div class="nl-detail-title">{e(chosen)}{badge}</div>'
                             f'<div class="nl-detail-body">{body}</div>{extra}</div>', unsafe_allow_html=True)
 
-            st.markdown(swaps_html(r) + f'<div class="nl-tip">💡 <b>Try this:</b> {r.non_restrictive_tip}</div>',
-                        unsafe_allow_html=True)
+            st.markdown(swaps_html(r) + tip_html(r), unsafe_allow_html=True)
 
         elif mode == "Compare two" and cmp:
             ra, rb = cmp
-            win = 0 if ra.alignment_score >= rb.alignment_score else 1
+            tie = ra.alignment_score == rb.alignment_score
+            win = None if tie else (0 if ra.alignment_score > rb.alignment_score else 1)
             cols = ""
             for idx, (rr, lab) in enumerate([(ra, "A"), (rb, "B")]):
                 badge = '<div class="nl-win">✓ Better fit for you</div>' if idx == win else ""
                 cols += (f'<div class="nl-cmp-col {"win" if idx == win else ""}">{badge}'
                          + ring(rr.alignment_score, 130, f"c{idx}")
-                         + f'<div class="nl-cmp-name">{lab} · {rr.product_name}</div>'
-                           f'<div class="nl-cmp-type">{rr.product_type}</div>'
+                         + f'<div class="nl-cmp-name">{lab} · {e(rr.product_name)}</div>'
+                           f'<div class="nl-cmp-type">{e(rr.product_type)}</div>'
                            f'<div class="nl-cmp-row" style="color:{WARN}">● {len(rr.triggers)} worth knowing</div>'
                            f'<div class="nl-cmp-row" style="color:{GOOD}">● {len(rr.supportive_wins)} working for you</div>'
                          + pros_cons(rr) + '</div>')
-            w, l = (ra, rb) if win == 0 else (rb, ra)
-            mixed = is_skincare(ra) != is_skincare(rb)
-            note = ('<div class="nl-hint">Heads up: one of these is food and one is skincare, so each was scored '
-                    'against a different part of your profile. Compare two of the same kind for a fairer match-up.</div>'
-                    if mixed else "")
-            st.markdown(
-                f'<div class="nl-cmp">{cols}</div>{note}'
-                f'<div class="nl-why"><b>Why {w.product_name} wins:</b> {len(w.triggers)} flagged vs {len(l.triggers)}, and '
-                f'{len(w.supportive_wins)} ingredients working for you vs {len(l.supportive_wins)}. '
-                f'{win_sentence(w)}</div>'
-                + swaps_html(l)
-                + f'<div class="nl-tip">💡 <b>Try this:</b> {w.non_restrictive_tip}</div>',
-                unsafe_allow_html=True)
+
+            notes = ""
+            if is_skincare(ra) != is_skincare(rb):
+                notes += ('<div class="nl-hint">Heads up: one of these is food and one is skincare, so each was scored '
+                          'against a different part of your profile. Compare two of the same kind for a fairer match-up.</div>')
+            cmp_prof = st.session_state.get("cmp_profile")
+            if cmp_prof and cmp_prof != profile:
+                notes += ('<div class="nl-hint">Your goals have changed since this comparison. '
+                          'Tap <b>Compare</b> again to update it.</div>')
+
+            if tie:
+                why = (f'<div class="nl-why"><b>It\'s a tie at {ra.alignment_score}.</b> {e(ra.product_name)} has '
+                       f'{len(ra.triggers)} flagged and {len(ra.supportive_wins)} working for you; {e(rb.product_name)} has '
+                       f'{len(rb.triggers)} flagged and {len(rb.supportive_wins)} working for you. '
+                       f'Check the lists above to see which trade-offs matter more to you.</div>')
+                extras = tip_html(ra)
+            else:
+                w, l = (ra, rb) if win == 0 else (rb, ra)
+                why = (f'<div class="nl-why"><b>Why {e(w.product_name)} wins:</b> {len(w.triggers)} flagged vs '
+                       f'{len(l.triggers)}, and {len(w.supportive_wins)} ingredients working for you vs '
+                       f'{len(l.supportive_wins)}. {win_sentence(w)}</div>')
+                extras = swaps_html(l) + tip_html(w)
+            st.markdown(f'<div class="nl-cmp">{cols}</div>{notes}{why}{extras}', unsafe_allow_html=True)
         else:
             hint = "Add two labels, then tap Compare." if mode == "Compare two" else "Set your goals, add a label, then tap Analyze."
             st.markdown(ring(None, 170) + f'<div class="nl-empty" style="margin-top:14px"><b>Your results will appear here</b><br>'
