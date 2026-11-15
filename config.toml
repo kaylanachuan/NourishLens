@@ -1,5 +1,9 @@
 [theme]
-primaryColor = "#9CAF88"
-backgroundColor = "#FBFCF8"
-secondaryBackgroundColor = "#EEF2E8"
+primaryColor = "#4F6340"
+backgroundColor = "#E3EADB"
+secondaryBackgroundColor = "#FFFFFF"
 textColor = "#1F2A18"
+
+[server]
+# Serves files in the static/ folder (used for the PP Editorial New font files)
+enableStaticServing = true
