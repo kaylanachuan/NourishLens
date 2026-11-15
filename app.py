@@ -215,6 +215,14 @@ def kind_of(r, name):
     return "neutral"
 
 
+def win_sentence(w):
+    """One friendly sentence about the top supportive ingredient, or nothing if there isn't one."""
+    if not w.supportive_wins or not w.supportive_wins[0].benefit:
+        return ""
+    top = w.supportive_wins[0]
+    return f'{top.ingredient} adds {top.benefit[0].lower() + top.benefit[1:]}'
+
+
 # ---------- Hero ----------
 st.markdown('<div class="nl-hero-title">Know what\'s <span class="nl-grad">in it.</span></div>'
             '<div class="nl-hero-sub">Snap any food or skincare label. See how every ingredient fits your goals.</div>',
@@ -293,25 +301,30 @@ with right:
         cmp = st.session_state.get("cmp")
 
         if mode == "Single scan" and r:
+            # Remove duplicate ingredient names (duplicates would break the tappable tags)
+            ingredients = list(dict.fromkeys(i for i in r.all_ingredients if i.strip()))
+            kinds = {name: kind_of(r, name) for name in ingredients}
+            n_neutral = sum(1 for k in kinds.values() if k == "neutral")
+
             st.markdown(
                 f'<div class="nl-product"><img src="{st.session_state.thumb}"><div>'
                 f'<div class="nl-product-name">{r.product_name}</div>'
-                f'<div class="nl-product-meta">{r.product_type} · {len(r.all_ingredients)} ingredients · Scanned just now</div>'
+                f'<div class="nl-product-meta">{r.product_type} · {len(ingredients)} ingredients · Scanned just now</div>'
                 f'</div></div><div style="height:18px"></div>'
                 + ring(r.alignment_score, 180, "single")
                 + f'<div class="nl-status">{status(r.alignment_score)}</div><div class="nl-verdict">{r.verdict_headline}</div>'
                 + f'<div class="nl-stats">'
                   f'<div style="background:{WARN_BG};color:{WARN}"><b>{len(r.triggers)}</b><span>Worth knowing</span></div>'
                   f'<div style="background:{GOOD_BG};color:{GOOD}"><b>{len(r.supportive_wins)}</b><span>Working for you</span></div>'
-                  f'<div style="background:rgba(255,255,255,.7);color:{NEUTRAL}"><b>{len(r.all_ingredients) - len(r.triggers) - len(r.supportive_wins)}</b><span>Neutral</span></div></div>'
+                  f'<div style="background:rgba(255,255,255,.7);color:{NEUTRAL}"><b>{n_neutral}</b><span>Neutral</span></div></div>'
                 + '<div class="nl-sec">Every ingredient · tap one to learn more</div>',
                 unsafe_allow_html=True)
 
             # Color each ingredient tag by its kind
             styles = {"warn": (WARN_BG, WARN), "good": (GOOD_BG, GOOD), "neutral": (NEUTRAL_BG, NEUTRAL)}
             css = ""
-            for i, name in enumerate(r.all_ingredients, start=1):
-                bg, fg = styles[kind_of(r, name)]
+            for i, name in enumerate(ingredients, start=1):
+                bg, fg = styles[kinds[name]]
                 css += (f'.st-key-tags button[data-variant="pills"]:nth-child({i}) {{ background:{bg} !important; '
                         f'color:{fg} !important; border:1px solid transparent !important; font-weight:600; }}')
             css += ('.st-key-tags button[data-variant="pills"][aria-pressed="true"] { box-shadow: 0 0 0 2px currentColor; }'
@@ -319,11 +332,12 @@ with right:
             st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
             with st.container(key="tags"):
-                first_flag = r.triggers[0].ingredient if r.triggers else None
-                chosen = st.pills("Ingredients", r.all_ingredients, default=first_flag, label_visibility="collapsed")
+                # Default to the first flagged ingredient that actually appears in the list
+                first_flag = next((n for n in ingredients if kinds[n] == "warn"), None)
+                chosen = st.pills("Ingredients", ingredients, default=first_flag, label_visibility="collapsed")
 
             if chosen:
-                k = kind_of(r, chosen)
+                k = kinds.get(chosen, "neutral")
                 if k == "warn":
                     t = next(t for t in r.triggers if same(t.ingredient, chosen))
                     color, badge, body = WARN, f'<span class="nl-badge" style="background:{WARN_BG};color:{WARN}">{t.pathway}</span>', t.explanation
@@ -353,7 +367,7 @@ with right:
                 f'<div class="nl-cmp">{cols}</div>'
                 f'<div class="nl-why"><b>Why {w.product_name} wins:</b> {len(w.triggers)} flagged vs {len(l.triggers)}, and '
                 f'{len(w.supportive_wins)} ingredients working for you vs {len(l.supportive_wins)}. '
-                f'{w.supportive_wins[0].ingredient} adds {w.supportive_wins[0].benefit[0].lower() + w.supportive_wins[0].benefit[1:]}</div>'
+                f'{win_sentence(w)}</div>'
                 f'<div class="nl-tip">💡 <b>Try this:</b> {w.non_restrictive_tip}</div>',
                 unsafe_allow_html=True)
         else:
