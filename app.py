@@ -192,8 +192,6 @@ button {{ border-radius: 12px !important; }}
 </style>
 <div class="nl-nav">
   <div class="nl-logo"><div class="nl-logo-mark"><img src="{LEAF}"></div>NourishLens</div>
-  <div class="nl-links"><a href="#goals" target="_self">How it works</a><a href="#results" target="_self">Results</a>
-    <a class="nl-cta" href="#scan" target="_self">Scan a label</a></div>
 </div>
 """, unsafe_allow_html=True)
 
