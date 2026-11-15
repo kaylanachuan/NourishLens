@@ -413,9 +413,6 @@ with left:
             st.markdown('<div class="nl-mini">Concerns</div>', unsafe_allow_html=True)
             skin_concerns = st.pills("Skin concerns", SKIN_CONCERNS, selection_mode="multi", key="skin_concerns",
                                      label_visibility="collapsed") or []
-        st.markdown('<div class="nl-route">Set up both if you like. Whatever you scan, NourishLens tells food from skincare '
-                    'and scores it against the matching profile. This switch also picks which sample labels you see.</div>',
-                    unsafe_allow_html=True)
         with st.expander("Add custom filters"):
             custom_rules = st.text_input("Anything specific to flag", placeholder="e.g. whey, coconut oil, fragrance")
 
