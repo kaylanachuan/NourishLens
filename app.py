@@ -180,6 +180,9 @@ button {{ border-radius: 12px !important; }}
 .nl-cmp-type {{ font-size: .78rem; opacity: .55; margin-top: 2px; }}
 .nl-cmp-row {{ font-size: .88rem; margin-top: 6px; }}
 .nl-why {{ margin-top: 16px; border-radius: 16px; padding: 14px 16px; background: rgba(255,255,255,0.8); line-height: 1.5; }}
+.nl-list {{ text-align: left; font-size: .85rem; margin-top: 12px; line-height: 1.4; }}
+.nl-list ul {{ padding-left: 18px; margin: 4px 0 10px; }}
+.nl-list li i {{ opacity: .65; }}
 </style>
 <div class="nl-nav">
   <div class="nl-logo"><div class="nl-logo-mark">🌿</div>NourishLens</div>
@@ -243,6 +246,18 @@ def win_sentence(w):
         return ""
     top = w.supportive_wins[0]
     return f'{top.ingredient} adds {top.benefit[0].lower() + top.benefit[1:]}'
+
+
+def pros_cons(rr):
+    """Two short lists for a compare column: what's flagged (and who it matters for) and what's working."""
+    bad = "".join(f'<li><b>{t.ingredient}</b>: {t.explanation}'
+                  + (f' <i>Matters most for {t.matters_most_for}.</i>' if t.matters_most_for else "")
+                  + '</li>' for t in rr.triggers) \
+        or '<li style="opacity:.6">Nothing flagged</li>'
+    good = "".join(f'<li><b>{w.ingredient}</b>: {w.benefit}</li>' for w in rr.supportive_wins) \
+        or '<li style="opacity:.6">Nothing standout</li>'
+    return (f'<div class="nl-list"><div style="color:{WARN}"><b>Worth knowing</b></div><ul>{bad}</ul>'
+            f'<div style="color:{GOOD}"><b>Working for you</b></div><ul>{good}</ul></div>')
 
 
 def is_skincare(r):
@@ -435,7 +450,8 @@ with right:
                          + f'<div class="nl-cmp-name">{lab} · {rr.product_name}</div>'
                            f'<div class="nl-cmp-type">{rr.product_type}</div>'
                            f'<div class="nl-cmp-row" style="color:{WARN}">● {len(rr.triggers)} worth knowing</div>'
-                           f'<div class="nl-cmp-row" style="color:{GOOD}">● {len(rr.supportive_wins)} working for you</div></div>')
+                           f'<div class="nl-cmp-row" style="color:{GOOD}">● {len(rr.supportive_wins)} working for you</div>'
+                         + pros_cons(rr) + '</div>')
             w, l = (ra, rb) if win == 0 else (rb, ra)
             mixed = is_skincare(ra) != is_skincare(rb)
             note = ('<div class="nl-hint">Heads up: one of these is food and one is skincare, so each was scored '

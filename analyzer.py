@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -156,7 +157,7 @@ Steps:
 # 4. Send the image + profile to Gemini
 # ---------------------------------------------------------------------------
 
-def analyze_label(image: Image.Image, food_goals: list[str], skin_type: str | None,
+def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional[str],
                   skin_concerns: list[str], custom_rules: str) -> ProductAnalysis:
     # Resize large phone photos so uploads stay fast
     img_copy = image.copy()
