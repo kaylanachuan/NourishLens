@@ -1,3 +1,4 @@
+
 import base64  # NourishLens UI: sage theme, scan animation, tappable ingredients, compare mode
 import html
 import io
@@ -10,6 +11,16 @@ from PIL import Image
 from analyzer import AnalysisError, analyze_label
 
 st.set_page_config(page_title="NourishLens", page_icon="🌿", layout="wide")
+
+# iPhone photos are HEIC. Pillow needs the pillow-heif add-on to open them (pip install pillow-heif).
+# Without it the app still works; uploads are just limited to JPG/PNG/WEBP.
+PHOTO_TYPES = ["jpg", "jpeg", "png", "webp"]
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    PHOTO_TYPES += ["heic", "heif"]
+except ImportError:
+    pass
 
 # Sample labels for people without a photo. The Food / Skincare switch in Step 1 picks which pair is used.
 SAMPLES = {
@@ -382,7 +393,7 @@ with left:
         st.markdown('<div class="nl-step" id="scan">Step 2</div>', unsafe_allow_html=True)
         if mode == "Single scan":
             st.subheader("Scan the ingredient label", anchor=False)
-            up = st.file_uploader("📷  Drop a photo or take one", type=["jpg", "jpeg", "png", "webp"])
+            up = st.file_uploader("📷  Drop a photo or take one", type=PHOTO_TYPES)
             # The sample button only shows if the sample image is in the project folder
             if os.path.exists(sample_a):
                 st.button(f"No photo handy? Try a {noun} sample →", type="tertiary",
@@ -395,8 +406,8 @@ with left:
         else:
             st.subheader("Compare two products", anchor=False)
             a, b = st.columns(2)
-            up_a = a.file_uploader("Product A", type=["jpg", "jpeg", "png", "webp"])
-            up_b = b.file_uploader("Product B", type=["jpg", "jpeg", "png", "webp"])
+            up_a = a.file_uploader("Product A", type=PHOTO_TYPES)
+            up_b = b.file_uploader("Product B", type=PHOTO_TYPES)
             if os.path.exists(sample_a) and os.path.exists(sample_b):
                 st.button(f"No photos handy? Compare two {noun} samples →", type="tertiary",
                           on_click=use_sample, args=("sample2", focus))
