@@ -38,7 +38,7 @@ Create a `.env` file in the project folder:
 GEMINI_API_KEY=your_key_here
 ```
 
-Get a key at [Google AI Studio](https://aistudio.google.com/apikey). Never commit this file.
+Get a key at [Google AI Studio](https://aistudio.google.com/apikey).
 
 ## Run
 
@@ -50,12 +50,7 @@ streamlit run app.py
 
 - `app.py`: Streamlit UI
 - `analyzer.py`: Gemini calls and result models
-- `test_gemini.py`: quick API sanity check
 
 ## Notes
 
 NourishLens is an educational tool, not medical advice.
-
-## Roadmap
-
-- (things you'd like to add next)
