@@ -462,7 +462,7 @@ def use_sample(flag, focus):
 
 
 # ---------- Hero ----------
-st.markdown('<div class="nl-hero-title">Know what\'s <span class="nl-grad">in it.</span></div>'
+st.markdown('<div class="nl-hero-title">Be in <span class="nl-grad">control.</span></div>'
             '<div class="nl-hero-sub">Snap any food or skincare label. See how every ingredient fits your goals.</div>',
             unsafe_allow_html=True)
 mode = st.segmented_control("Mode", ["Single scan", "Compare two"], default="Single scan",
