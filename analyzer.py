@@ -223,6 +223,7 @@ def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional
                     system_instruction=SYSTEM_PROMPT,
                     response_mime_type="application/json",
                     response_schema=ProductAnalysis,
+                    temperature=0.2,
                 ),
             )
             return ProductAnalysis.model_validate_json(response.text)
