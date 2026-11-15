@@ -3,7 +3,6 @@ import html
 import io
 import math
 import os
-from urllib.parse import quote_plus
 from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
@@ -52,6 +51,19 @@ FOOD_GOALS = {
 # Must match the keys in analyzer.SKIN_TYPE_GUIDE and analyzer.SKIN_CONCERN_GUIDE
 SKIN_TYPES = ["Oily", "Dry", "Combination", "Normal"]
 SKIN_CONCERNS = ["Acne-prone", "Sensitive", "Eczema-prone", "Rosacea-prone", "Signs of aging", "Dark spots"]
+
+# Streamlit labels pill and switch buttons differently by version: newer versions use data-variant and
+# data-selected, while 1.50 (what Python 3.9 gets) uses kind="pills" / kind="pillsActive". These cover both.
+PILL = 'button[data-variant="pills"], button[kind="pills"], button[kind="pillsActive"]'
+PILL_ON = 'button[data-variant="pills"][data-selected="true"], button[kind="pillsActive"]'
+SEG = 'button[data-variant="segmented_control"], button[kind^="segmented_control"]'
+SEG_ON = 'button[data-variant="segmented_control"][data-selected="true"], button[kind="segmented_controlActive"]'
+
+
+def within(prefix, selectors, suffix=""):
+    """Add a container prefix (and optional suffix) to every selector in a comma-separated list."""
+    return ", ".join(f"{prefix} {part.strip()}{suffix}".strip() for part in selectors.split(","))
+
 
 st.markdown(f"""
 <style>
@@ -108,23 +120,23 @@ h3 {{ color: {INK} !important; font-size: 1.7rem !important; font-weight: 400 !i
 .nl-step {{ font-size: .76rem; font-weight: 700; letter-spacing: .08em; color: {ACCENT}; text-transform: uppercase; }}
 
 /* iOS-style segmented control */
-[role="radiogroup"][aria-label="Mode"], [role="radiogroup"][aria-label="Focus"] {{
+.st-key-mode div:has(> button), .st-key-focus div:has(> button) {{
   background: rgba(255,255,255,0.45); padding: 4px; border-radius: 14px; gap: 2px; display: inline-flex;
   border: 1px solid rgba(255,255,255,0.8); }}
-button[data-variant="segmented_control"] {{ border: none !important; background: transparent !important;
+{SEG} {{ border: none !important; background: transparent !important; box-shadow: none !important;
   border-radius: 10px !important; padding: 8px 22px !important; font-weight: 600 !important; color: #6B6B70 !important; }}
-button[data-variant="segmented_control"][aria-checked="true"] {{ background: white !important; color: {INK} !important;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
+{SEG_ON} {{ background: white !important; color: {INK} !important; box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important; }}
+{within("", SEG, " *")} {{ color: inherit !important; }}
 
 /* Food / Skincare switch */
 .nl-mini {{ font-size: .74rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; opacity: .5; margin: 4px 0 -4px; }}
 .nl-route {{ font-size: .85rem; opacity: .6; margin-top: 10px; line-height: 1.4; }}
 
 /* Goal chips */
-button[data-variant="pills"] {{ border-radius: 999px !important; padding: 8px 16px !important;
+{PILL} {{ border-radius: 999px !important; padding: 8px 16px !important;
   background: rgba(255,255,255,0.7) !important; border: 1px solid rgba(255,255,255,0.9) !important; color: {INK} !important; }}
-button[data-variant="pills"][aria-pressed="true"] {{ background: {ACCENT} !important; color: white !important; border-color: {ACCENT} !important; }}
-button[data-variant="pills"][aria-pressed="true"] * {{ color: white !important; }}
+{PILL_ON} {{ background: {ACCENT} !important; color: white !important; border-color: {ACCENT} !important; }}
+{within("", PILL, " *")} {{ color: inherit !important; }}
 
 /* Upload */
 [data-testid="stFileUploaderDropzone"] {{ min-height: 150px; flex-direction: column; justify-content: center; align-items: center;
@@ -186,16 +198,6 @@ button {{ border-radius: 12px !important; }}
 .nl-swap-top {{ font-size: .82rem; opacity: .6; }}
 .nl-swap-look {{ font-weight: 700; color: {ACCENT}; margin-top: 2px; }}
 .nl-swap-why {{ opacity: .75; font-size: .92rem; margin-top: 2px; }}
-.nl-pick {{ border-radius: 16px; padding: 12px 16px; margin-top: 8px; background: rgba(255,255,255,0.85);
-  border-left: 4px solid {GOOD}; line-height: 1.45; }}
-.nl-pick-brand {{ font-size: .78rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; opacity: .55; }}
-.nl-pick-name {{ font-weight: 700; }}
-.nl-pick-why {{ opacity: .75; font-size: .92rem; margin-top: 2px; }}
-.nl-pick-ing {{ margin-top: 6px; }}
-.nl-pick-ing span {{ display: inline-block; font-size: .75rem; font-weight: 600; color: {GOOD}; background: {GOOD_BG};
-  padding: 2px 9px; border-radius: 999px; margin: 2px 4px 0 0; }}
-.nl-pick a {{ font-size: .85rem; font-weight: 600; color: {ACCENT} !important; text-decoration: none; }}
-.nl-pick-note {{ font-size: .8rem; opacity: .55; margin-top: 6px; line-height: 1.4; }}
 .nl-tip {{ border-radius: 16px; padding: 14px 16px; margin-top: 16px; line-height: 1.45;
   background: linear-gradient(135deg, rgba(226,236,216,0.95), rgba(239,243,233,0.95)); }}
 .nl-empty {{ text-align: center; padding: 6px 16px 12px; }}
@@ -328,26 +330,6 @@ def swaps_html(r):
                     f'<div class="nl-swap-look">→ {e(s.look_for)}</div><div class="nl-swap-why">{e(s.why)}</div></div>'
                     for s in r.swaps)
     return '<div class="nl-sec">Better matches to look for</div>' + cards
-
-
-def picks_html(picks, category, heading=None):
-    """Named products of the same kind that should suit the user better (skincare only)."""
-    if not picks:
-        return ""
-    kind = e(category or "product")
-    cards = ""
-    for p in picks:
-        search = quote_plus(f"{p.brand} {p.product_name}")
-        ings = "".join(f"<span>{e(i)}</span>" for i in p.key_ingredients[:4])
-        cards += (f'<div class="nl-pick"><div class="nl-pick-brand">{e(p.brand)}</div>'
-                  f'<div class="nl-pick-name">{e(p.product_name)}</div>'
-                  f'<div class="nl-pick-why">{e(p.why_it_fits)}</div>'
-                  + (f'<div class="nl-pick-ing">{ings}</div>' if ings else "")
-                  + f'<a href="https://www.google.com/search?q={search}" target="_blank">Look it up →</a></div>')
-    title = heading or f"{kind.capitalize()}s that may suit you better"
-    return (f'<div class="nl-sec">{title}</div>{cards}'
-            '<div class="nl-pick-note">Suggested by AI from each product\'s usual formula. Formulas change, '
-            'so scan the label before you buy to confirm it\'s a good fit.</div>')
 
 
 def tip_html(r):
@@ -497,7 +479,11 @@ with right:
 
             scored_chip = (f'<div class="nl-scored">Scored for: {e(target)}</div>' if target else
                            f'<div class="nl-scored">Scored for: general {"skin health" if skin else "wellness"}</div>')
-            if not target:
+            if r.unread_note:
+                hint = (f'<b>Only part of this label was readable.</b> {e(r.unread_note)} '
+                        f'The score only covers the {len(ingredients)} ingredients shown. For a full read, retake the '
+                        f'photo closer, flat and in good light, with the whole ingredient list in frame.')
+            elif not target:
                 hint = (f'Want a personal score? Set your '
                         f'{"skin type and concerns under <b>Skin profile</b>" if skin else "<b>Food goals</b>"} '
                         f'in Step 1, then analyze again.')
@@ -526,16 +512,16 @@ with right:
             css = ""
             for i, name in enumerate(ingredients, start=1):
                 bg, fg = styles[kinds[name]]
-                css += (f'.st-key-tags button[data-variant="pills"]:nth-child({i}) {{ background:{bg} !important; '
+                css += (f'{within(".st-key-tags", PILL, f":nth-child({i})")} {{ background:{bg} !important; '
                         f'color:{fg} !important; border:1px solid transparent !important; font-weight:600; }}')
-            css += ('.st-key-tags button[data-variant="pills"][aria-pressed="true"] { box-shadow: 0 0 0 2px currentColor; }'
-                    '.st-key-tags button[data-variant="pills"][aria-pressed="true"] * { color: inherit !important; }')
+            css += f'{within(".st-key-tags", PILL_ON)} {{ box-shadow: 0 0 0 2px currentColor !important; }}' 
             st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
             with st.container(key="tags"):
                 # Default to the first flagged ingredient that actually appears in the list
-                first_flag = next((n for n in ingredients if kinds[n] == "warn"), None)
-                chosen = st.pills("Ingredients", ingredients, default=first_flag, label_visibility="collapsed")
+                first = next((n for n in ingredients if kinds[n] == "warn"),
+                             next((n for n in ingredients if kinds[n] == "good"), None))
+                chosen = st.pills("Ingredients", ingredients, default=first, label_visibility="collapsed")
 
             if chosen:
                 extra = ""
@@ -552,8 +538,7 @@ with right:
                 st.markdown(f'<div class="nl-detail" style="border-color:{color}"><div class="nl-detail-title">{e(chosen)}{badge}</div>'
                             f'<div class="nl-detail-body">{body}</div>{extra}</div>', unsafe_allow_html=True)
 
-            picks = picks_html(r.product_picks, r.product_category) if skin else ""
-            st.markdown(swaps_html(r) + picks + tip_html(r), unsafe_allow_html=True)
+            st.markdown(swaps_html(r) + tip_html(r), unsafe_allow_html=True)
 
         elif mode == "Compare two" and cmp:
             ra, rb = cmp
@@ -591,19 +576,8 @@ with right:
                        f'{len(l.triggers)}, and {len(w.supportive_wins)} ingredients working for you vs '
                        f'{len(l.supportive_wins)}. {win_sentence(w)}</div>')
                 extras = swaps_html(l) + tip_html(w)
-            # Both skincare and neither a great fit: suggest products of the same kind that should be
-            if is_skincare(ra) and is_skincare(rb) and max(ra.alignment_score, rb.alignment_score) < 70:
-                seen, merged = set(), []
-                for p in ra.product_picks + rb.product_picks:
-                    key = _norm(f"{p.brand} {p.product_name}")
-                    if key not in seen and _norm(p.product_name) not in (_norm(ra.product_name), _norm(rb.product_name)):
-                        seen.add(key)
-                        merged.append(p)
-                kind = ra.product_category or rb.product_category or "product"
-                extras = picks_html(merged[:3], kind, f"Neither is a great fit. {e(kind).capitalize()}s that may suit you better") + extras
             st.markdown(f'<div class="nl-cmp">{cols}</div>{notes}{why}{extras}', unsafe_allow_html=True)
         else:
             hint = "Add two labels, then tap Compare." if mode == "Compare two" else "Set your goals, add a label, then tap Analyze."
             st.markdown(ring(None, 170) + f'<div class="nl-empty" style="margin-top:14px"><b>Your results will appear here</b><br>'
                         f'<span style="opacity:.6">{hint}</span></div>', unsafe_allow_html=True)
-            
