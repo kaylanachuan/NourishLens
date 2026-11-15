@@ -103,6 +103,11 @@ class Swap(BaseModel):
     why: str = Field(description="One sentence on why this fits the user's profile")
 
 
+class AvoidMatch(BaseModel):
+    term: str = Field(description="The avoid-list term, written exactly as the user typed it")
+    ingredient: str = Field(description="The matching ingredient, written exactly as it appears in all_ingredients")
+
+
 class ProductAnalysis(BaseModel):
     product_name: str = Field(description="Short product name from the package, e.g. 'Chocolate Peanut Protein Bar'. "
                                           "If not visible, describe the product in 2-4 words")
@@ -121,6 +126,8 @@ class ProductAnalysis(BaseModel):
                                              "only on the ingredients actually read")
     verdict_headline: str = Field(description="Short, empowering 1-sentence summary without shaming")
     triggers: list[IngredientFlag]
+    avoid_matches: list[AvoidMatch] = Field(description="Every ingredient that is, contains or comes from something on "
+                                                        "the user's avoid list. Empty if there is no avoid list or no match")
     supportive_wins: list[SupportiveWin]
     swaps: list[Swap] = Field(description="1 to 3 swaps tailored to the user's profile; empty if already a great fit")
     non_restrictive_tip: str = Field(description="Practical pairing, layering or usage tip without fear-mongering")
@@ -152,11 +159,16 @@ Steps:
    read and include both. If part of the list is unreadable, say so in unread_note.
 3. Score ONLY against the part of the profile that matches the product type: food goals for food, skin type and
    skin concerns for skincare. If that part is empty, score for general balanced wellness (food) or general skin
-   health (skincare). Custom filters apply to both.
+   health (skincare).
 4. Look for BOTH triggers and supportive ingredients. The score must agree with them: a product with no triggers
    and several supportive ingredients should score high. Never lower the score because part of the label was
    unreadable; report that in unread_note instead, and don't mention it in verdict_headline.
-5. Suggest swaps as ingredient profiles to look for (e.g. "a zinc oxide mineral sunscreen with an oil-free gel
+5. Avoid list: if the user gave ingredients to avoid, check every ingredient against it, including synonyms,
+   scientific names and derivatives (e.g. 'parfum' or 'linalool' for fragrance; 'casein' or 'milk solids' for dairy;
+   'cocos nucifera oil' or 'coconut alkanes' for coconut oil). Record each match in avoid_matches AND add it to
+   triggers with pathway 'Your filter' and a short explanation of how it relates to that term. Lower the score
+   for each match, since the user has said they want to avoid it. This applies to food and skincare alike.
+6. Suggest swaps as ingredient profiles to look for (e.g. "a zinc oxide mineral sunscreen with an oil-free gel
    base"), tailored to the user's profile. Never name brands or specific products.
 
 {_section("FOOD GOALS", FOOD_GUIDE)}
@@ -180,7 +192,7 @@ class AnalysisError(Exception):
 
 
 def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional[str],
-                  skin_concerns: list[str], custom_rules: str) -> ProductAnalysis:
+                  skin_concerns: list[str], avoid: list[str]) -> ProductAnalysis:
     # Resize large phone photos so uploads stay fast
     img_copy = image.copy()
     if img_copy.mode in ("RGBA", "P"):
@@ -191,7 +203,7 @@ def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional
     if not api_key:
         raise AnalysisError("No Gemini API key found. Add GEMINI_API_KEY=... to the .env file, then restart the app.")
 
-    # 12-second timeout per attempt so a busy model fails over quickly
+    # 45 seconds per attempt: enough for the main model to finish, so slow answers aren't thrown away
     client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=45000))
 
     user_prompt = f"""
@@ -199,7 +211,7 @@ def analyze_label(image: Image.Image, food_goals: list[str], skin_type: Optional
     - Food goals: {', '.join(food_goals) if food_goals else 'None selected'}
     - Skin type: {skin_type or 'Not set'}
     - Skin concerns: {', '.join(skin_concerns) if skin_concerns else 'None selected'}
-    - Custom filters/notes: {custom_rules or 'None'}
+    - Ingredients to avoid: {', '.join(avoid) if avoid else 'None'}
     """
 
     for model_name in MODELS:

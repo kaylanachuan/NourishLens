@@ -3,6 +3,8 @@ import html
 import io
 import math
 import os
+import re
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
@@ -33,9 +35,20 @@ except ImportError:
     pass
 
 # Sample labels for people without a photo. The Food / Skincare switch in Step 1 picks which pair is used.
+# They can sit next to app.py or in a "samples" folder beside it; the app checks both.
+APP_DIR = Path(__file__).parent
+
+
+def find_sample(name):
+    for folder in (APP_DIR, APP_DIR / "samples"):
+        if (folder / name).exists():
+            return folder / name
+    return APP_DIR / name  # not found: the sample button stays hidden
+
+
 SAMPLES = {
-    "Food": ("sample_food.png", "sample_food_2.png"),
-    "Skincare": ("sample_skin.png", "sample_skin_2.png"),
+    "Food": (find_sample("sample_food.png"), find_sample("sample_food_2.png")),
+    "Skincare": (find_sample("sample_skin.png"), find_sample("sample_skin_2.png")),
 }
 # Filled in when someone tries a skincare sample without setting a skin profile, so the score is personal
 DEMO_SKIN_TYPE, DEMO_SKIN_CONCERNS = "Oily", ["Acne-prone"]
@@ -142,7 +155,6 @@ h3 {{ color: {INK} !important; font-size: 1.7rem !important; font-weight: 400 !i
 
 /* Food / Skincare switch */
 .nl-mini {{ font-size: .74rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; opacity: .5; margin: 4px 0 -4px; }}
-.nl-route {{ font-size: .85rem; opacity: .6; margin-top: 10px; line-height: 1.4; }}
 
 /* Goal chips */
 {PILL} {{ border-radius: 999px !important; padding: 8px 16px !important;
@@ -210,6 +222,10 @@ button {{ border-radius: 12px !important; }}
 .nl-swap-top {{ font-size: .82rem; opacity: .6; }}
 .nl-swap-look {{ font-weight: 700; color: {ACCENT}; margin-top: 2px; }}
 .nl-swap-why {{ opacity: .75; font-size: .92rem; margin-top: 2px; }}
+.nl-filters {{ margin-top: 10px; font-size: .85rem; line-height: 1.9; }}
+.nl-filters span {{ display: inline-block; font-weight: 600; padding: 2px 10px; border-radius: 999px; margin-right: 4px; }}
+.nl-filters .hit {{ background: {WARN_BG}; color: {WARN}; }}
+.nl-filters .miss {{ background: rgba(255,255,255,0.8); color: {NEUTRAL}; }}
 .nl-tip {{ border-radius: 16px; padding: 14px 16px; margin-top: 16px; line-height: 1.45;
   background: linear-gradient(135deg, rgba(226,236,216,0.95), rgba(239,243,233,0.95)); }}
 .nl-empty {{ text-align: center; padding: 6px 16px 12px; }}
@@ -299,6 +315,66 @@ def match_ingredients(ingredients, items):
     return found
 
 
+def parse_avoid(text):
+    """'whey, coconut oil; fragrance' -> ['whey', 'coconut oil', 'fragrance']"""
+    terms, seen = [], set()
+    for t in re.split(r"[,;\n]+", text or ""):
+        t = t.strip()
+        if t and t.lower() not in seen:  # drop repeats like "whey" and "Whey"
+            seen.add(t.lower())
+            terms.append(t)
+    return terms
+
+
+def _words(s):
+    """Lowercase words with simple plurals trimmed, so 'Seed Oils' and 'seed oil' match."""
+    return {w[:-1] if w.endswith("s") and len(w) > 3 and not w.endswith("ss") else w
+            for w in re.findall(r"[a-z0-9]+", str(s).lower())}
+
+
+def term_matches(term, ingredient):
+    """True if every word of the avoid term appears in the ingredient: 'coconut oil' matches
+    'Cocos Nucifera (Coconut) Oil', and 'whey' matches 'Whey Protein Isolate'."""
+    t = _words(term)
+    return bool(t) and t <= _words(ingredient)
+
+
+def build_view(r, avoid):
+    """Everything the results screens need about one product: which ingredients are flagged (by Gemini
+    or by your avoid list), which are working for you, and which avoid-list terms were found."""
+    ingredients = list(dict.fromkeys(i.strip() for i in r.all_ingredients if i.strip()))
+    flags = match_ingredients(ingredients, r.triggers)
+
+    # Avoid list: the app's own word match, plus synonyms Gemini caught (e.g. 'parfum' for fragrance)
+    hits = {}
+    for name in ingredients:
+        term = next((t for t in avoid if term_matches(t, name)), None)
+        if term:
+            hits[name] = term
+    for name, m in match_ingredients(ingredients, r.avoid_matches).items():
+        hits.setdefault(name, next((t for t in avoid if t.lower() == m.term.strip().lower()), m.term))
+    for name, term in hits.items():
+        base = flags.get(name)
+        flags[name] = SimpleNamespace(
+            ingredient=name, pathway="Your filter",
+            explanation=base.explanation if base else f"This is on your avoid list ({term}).",
+            matters_most_for=base.matters_most_for if base else "")
+
+    wins = match_ingredients([n for n in ingredients if n not in flags], r.supportive_wins)
+    kinds = {n: "warn" if n in flags else "good" if n in wins else "neutral" for n in ingredients}
+    found = {t.lower() for t in hits.values()}
+    return SimpleNamespace(ingredients=ingredients, flags=flags, wins=wins, kinds=kinds, found=found)
+
+
+def filters_html(avoid, view):
+    """'Your filters: whey (found) · coconut oil (not in this product)'"""
+    if not avoid:
+        return ""
+    chips = "".join(f'<span class="hit">{e(t)}: found</span>' if t.lower() in view.found
+                    else f'<span class="miss">{e(t)}: not in this product</span>' for t in avoid)
+    return f'<div class="nl-filters"><b>Your filters:</b> {chips}</div>'
+
+
 def win_sentence(w):
     """One friendly sentence about the top supportive ingredient, or nothing if there isn't one."""
     if not w.supportive_wins or not w.supportive_wins[0].benefit:
@@ -307,13 +383,14 @@ def win_sentence(w):
     return f'{e(top.ingredient)} adds {e(top.benefit[0].lower() + top.benefit[1:])}'
 
 
-def pros_cons(rr):
+def pros_cons(view):
     """Two short lists for a compare column: what's flagged (and who it matters for) and what's working."""
-    bad = "".join(f'<li><b>{e(t.ingredient)}</b>: {e(t.explanation)}'
-                  + (f' <i>Matters most for {e(t.matters_most_for)}.</i>' if t.matters_most_for else "")
-                  + '</li>' for t in rr.triggers) \
+    bad = "".join(f'<li><b>{e(name)}</b>: {e(t.explanation)}'
+                  + (' <i>On your avoid list.</i>' if t.pathway == "Your filter" else
+                     f' <i>Matters most for {e(t.matters_most_for)}.</i>' if t.matters_most_for else "")
+                  + '</li>' for name, t in view.flags.items()) \
         or '<li style="opacity:.6">Nothing flagged</li>'
-    good = "".join(f'<li><b>{e(w.ingredient)}</b>: {e(w.benefit)}</li>' for w in rr.supportive_wins) \
+    good = "".join(f'<li><b>{e(name)}</b>: {e(w.benefit)}</li>' for name, w in view.wins.items()) \
         or '<li style="opacity:.6">Nothing standout</li>'
     return (f'<div class="nl-list"><div style="color:{WARN}"><b>Worth knowing</b></div><ul>{bad}</ul>'
             f'<div style="color:{GOOD}"><b>Working for you</b></div><ul>{good}</ul></div>')
@@ -413,11 +490,15 @@ with left:
             st.markdown('<div class="nl-mini">Concerns</div>', unsafe_allow_html=True)
             skin_concerns = st.pills("Skin concerns", SKIN_CONCERNS, selection_mode="multi", key="skin_concerns",
                                      label_visibility="collapsed") or []
-        with st.expander("Add custom filters"):
-            custom_rules = st.text_input("Anything specific to flag", placeholder="e.g. whey, coconut oil, fragrance")
+        with st.expander("Ingredients to avoid"):
+            avoid = parse_avoid(st.text_input(
+                "Anything you want flagged, separated by commas", key="avoid_text",
+                placeholder="e.g. whey, coconut oil, fragrance",
+                help="Matches are flagged orange with a 'Your filter' badge, including other names for the same "
+                     "thing (like 'parfum' for fragrance)."))
 
         food_goals = [FOOD_GOALS[p] for p in picked]
-        profile = {"food": list(picked), "skin_type": skin_type, "concerns": list(skin_concerns)}
+        profile = {"food": list(picked), "skin_type": skin_type, "concerns": list(skin_concerns), "avoid": avoid}
 
     sample_a, sample_b = SAMPLES[focus]
     noun = "food" if focus == "Food" else "skincare"
@@ -457,7 +538,7 @@ with right:
     with st.container(key="card_results"):
         st.markdown('<div class="nl-step" id="results">Your results</div>', unsafe_allow_html=True)
         run = st.session_state.pop("run", None)
-        args = (food_goals, skin_type, skin_concerns, custom_rules)
+        args = (food_goals, skin_type, skin_concerns, avoid)
 
         if run == "single":
             ph = st.empty()
@@ -492,11 +573,9 @@ with right:
             skin = is_skincare(r)
             target = scored_for(prof, skin)
 
-            # Remove duplicate ingredient names (duplicates would break the tappable tags)
-            ingredients = list(dict.fromkeys(i.strip() for i in r.all_ingredients if i.strip()))
-            flags = match_ingredients(ingredients, r.triggers)
-            wins = match_ingredients([n for n in ingredients if n not in flags], r.supportive_wins)
-            kinds = {n: "warn" if n in flags else "good" if n in wins else "neutral" for n in ingredients}
+            scan_avoid = prof.get("avoid", [])  # the avoid list this result was scanned with
+            view = build_view(r, scan_avoid)
+            ingredients, flags, wins, kinds = view.ingredients, view.flags, view.wins, view.kinds
             n_neutral = sum(1 for k in kinds.values() if k == "neutral")
 
             scored_chip = (f'<div class="nl-scored">Scored for: {e(target)}</div>' if target else
@@ -505,12 +584,12 @@ with right:
                 hint = (f'<b>Only part of this label was readable.</b> {e(r.unread_note)} '
                         f'The score only covers the {len(ingredients)} ingredients shown. For a full read, retake the '
                         f'photo closer, flat and in good light, with the whole ingredient list in frame.')
+            elif scored_for(profile, skin) != target or scan_avoid != avoid:
+                hint = "Your goals have changed since this scan. Tap <b>Analyze Label</b> again to update the score."
             elif not target:
                 hint = (f'Want a personal score? Set your '
                         f'{"skin type and concerns under <b>Skin profile</b>" if skin else "<b>Food goals</b>"} '
                         f'in Step 1, then analyze again.')
-            elif scored_for(profile, skin) != target:
-                hint = "Your goals have changed since this scan. Tap <b>Analyze Label</b> again to update the score."
             else:
                 hint = ""
             st.markdown(
@@ -519,13 +598,14 @@ with right:
                 f'<div class="nl-product-meta">{e(r.product_type)} · {e(kind_of(r).capitalize() or "Product")} · '
                 f'{len(ingredients)} ingredient{"" if len(ingredients) == 1 else "s"}</div>'
                 f'{scored_chip}</div></div>'
+                + filters_html(scan_avoid, view)
                 + (f'<div class="nl-hint">{hint}</div>' if hint else '')
                 + '<div style="height:18px"></div>'
                 + ring(r.alignment_score, 180, "single")
                 + f'<div class="nl-status">{status(r.alignment_score)}</div><div class="nl-verdict">{e(r.verdict_headline)}</div>'
                 + f'<div class="nl-stats">'
-                  f'<div style="background:{WARN_BG};color:{WARN}"><b>{len(r.triggers)}</b><span>Worth knowing</span></div>'
-                  f'<div style="background:{GOOD_BG};color:{GOOD}"><b>{len(r.supportive_wins)}</b><span>Working for you</span></div>'
+                  f'<div style="background:{WARN_BG};color:{WARN}"><b>{len(flags)}</b><span>Worth knowing</span></div>'
+                  f'<div style="background:{GOOD_BG};color:{GOOD}"><b>{len(wins)}</b><span>Working for you</span></div>'
                   f'<div style="background:rgba(255,255,255,.7);color:{NEUTRAL}"><b>{n_neutral}</b><span>Neutral</span></div></div>'
                 + '<div class="nl-sec">Every ingredient · tap one to learn more</div>',
                 unsafe_allow_html=True)
@@ -565,20 +645,25 @@ with right:
 
         elif mode == "Compare two" and cmp:
             ra, rb = cmp
+            cmp_avoid = (st.session_state.get("cmp_profile") or {}).get("avoid", [])
+            va, vb = build_view(ra, cmp_avoid), build_view(rb, cmp_avoid)
+            views = {id(ra): va, id(rb): vb}
             # Only rank products of the same kind: a sunscreen and a moisturizer do different jobs
             reason = mismatch_reason(ra, rb)
             tie = ra.alignment_score == rb.alignment_score
             win = None if (tie or reason) else (0 if ra.alignment_score > rb.alignment_score else 1)
             cols = ""
             for idx, (rr, lab) in enumerate([(ra, "A"), (rb, "B")]):
+                v = views[id(rr)]
                 badge = '<div class="nl-win">Better fit for you</div>' if idx == win else ""
                 cols += (f'<div class="nl-cmp-col {"win" if idx == win else ""}">{badge}'
                          + ring(rr.alignment_score, 130, f"c{idx}")
                          + f'<div class="nl-cmp-name">{lab} · {e(rr.product_name)}</div>'
                            f'<div class="nl-cmp-type">{e(rr.product_type)} · {e(kind_of(rr).capitalize() or "Product")}</div>'
-                           f'<div class="nl-cmp-row" style="color:{WARN}">● {len(rr.triggers)} worth knowing</div>'
-                           f'<div class="nl-cmp-row" style="color:{GOOD}">● {len(rr.supportive_wins)} working for you</div>'
-                         + pros_cons(rr) + '</div>')
+                           f'<div class="nl-cmp-row" style="color:{WARN}">● {len(v.flags)} worth knowing</div>'
+                           f'<div class="nl-cmp-row" style="color:{GOOD}">● {len(v.wins)} working for you</div>'
+                         + f'<div style="text-align:left">{filters_html(cmp_avoid, v)}</div>'
+                         + pros_cons(v) + '</div>')
 
             notes = ""
             cmp_prof = st.session_state.get("cmp_profile")
@@ -593,15 +678,16 @@ with right:
                 extras = ""
             elif tie:
                 why = (f'<div class="nl-why"><b>It\'s a tie at {ra.alignment_score}.</b> {e(ra.product_name)} has '
-                       f'{len(ra.triggers)} flagged and {len(ra.supportive_wins)} working for you; {e(rb.product_name)} has '
-                       f'{len(rb.triggers)} flagged and {len(rb.supportive_wins)} working for you. '
+                       f'{len(va.flags)} flagged and {len(va.wins)} working for you; {e(rb.product_name)} has '
+                       f'{len(vb.flags)} flagged and {len(vb.wins)} working for you. '
                        f'Check the lists above to see which trade-offs matter more to you.</div>')
                 extras = tip_html(ra)
             else:
                 w, l = (ra, rb) if win == 0 else (rb, ra)
-                why = (f'<div class="nl-why"><b>Why {e(w.product_name)} wins:</b> {len(w.triggers)} flagged vs '
-                       f'{len(l.triggers)}, and {len(w.supportive_wins)} ingredients working for you vs '
-                       f'{len(l.supportive_wins)}. {win_sentence(w)}</div>')
+                vw, vl = views[id(w)], views[id(l)]
+                why = (f'<div class="nl-why"><b>Why {e(w.product_name)} wins:</b> {len(vw.flags)} flagged vs '
+                       f'{len(vl.flags)}, and {len(vw.wins)} ingredients working for you vs '
+                       f'{len(vl.wins)}. {win_sentence(w)}</div>')
                 extras = swaps_html(l) + tip_html(w)
             st.markdown(f'<div class="nl-cmp">{cols}</div>{notes}{why}{extras}', unsafe_allow_html=True)
         else:
