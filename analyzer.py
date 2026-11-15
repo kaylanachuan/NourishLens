@@ -9,32 +9,155 @@ from PIL import Image
 load_dotenv()
 
 
-# 1. Define the exact JSON structure Gemini must return
+# ---------------------------------------------------------------------------
+# 1. What each goal looks for.
+#    To add a new goal or concern: add one line here, and a matching chip in app.py.
+#    The keys must match the values app.py sends (FOOD_GOALS values, SKIN_TYPES, SKIN_CONCERNS).
+# ---------------------------------------------------------------------------
+
+FOOD_GUIDE = {
+    "Acne: Hormonal & Insulin Pathways":
+        "Flag dairy/whey/casein (IGF-1 and insulin signaling) and refined sugars/syrups (high glycemic load). "
+        "Reward fiber, protein, zinc and omega-3s.",
+    "Acne: Gut & Inflammation":
+        "Flag refined omega-6 seed oils (sunflower, safflower, canola, soybean, 'vegetable' oil), emulsifiers "
+        "(polysorbate 80, carrageenan, carboxymethylcellulose) and artificial sweeteners. "
+        "Reward fiber, fermented ingredients, polyphenols and omega-3s.",
+    "Blood Sugar Balance":
+        "Flag added sugars, syrups and refined starches, especially near the top of the list. "
+        "Reward fiber, protein and fats that slow absorption.",
+    "Athletic: Lean Bulk (High Protein/Calories)":
+        "Reward bioavailable protein, healthy fats and calorie density. "
+        "Do NOT penalize calories or whey unless an acne goal is also selected.",
+    "Weight Loss / Calorie Deficit":
+        "Flag added sugars, refined starches and calorie-dense oils. Reward protein and fiber that support fullness.",
+}
+
+SKIN_TYPE_GUIDE = {
+    "Oily":
+        "Prefers lightweight, water- or gel-based textures. Heavy butters, waxes and rich oils near the top of the "
+        "list may feel heavy or clog pores. Reward niacinamide, salicylic acid, zinc PCA and light humectants "
+        "(glycerin, hyaluronic acid).",
+    "Dry":
+        "Needs richer textures: emollients and occlusives (shea butter, squalane, petrolatum, ceramides, fatty "
+        "alcohols like cetearyl alcohol) plus humectants. Do NOT penalize thick creams. Flag drying ingredients: "
+        "denatured alcohol near the top of the list and harsh sulfates (sodium lauryl sulfate).",
+    "Combination":
+        "Needs balance: lightweight hydration that won't overload oily areas. Flag very heavy occlusives and very "
+        "drying alcohols alike.",
+    "Normal":
+        "Few restrictions; focus on the selected concerns.",
+}
+
+SKIN_CONCERN_GUIDE = {
+    "Acne-prone":
+        "Flag commonly comedogenic ingredients: coconut oil, isopropyl myristate/palmitate, cocoa butter, wheat germ "
+        "oil, algae extract, laureth-4, heavy waxes. Mention that comedogenic ratings come from older tests and depend "
+        "on concentration and the whole formula. Reward salicylic acid, azelaic acid, niacinamide, zinc and "
+        "non-comedogenic hydrators.",
+    "Sensitive":
+        "Flag fragrance/parfum, essential oils, denatured alcohol near the top, menthol and strong acids. Reward short "
+        "ingredient lists, ceramides, panthenol, allantoin, glycerin and centella.",
+    "Eczema-prone":
+        "Prioritize barrier repair. Flag fragrance/parfum, essential oils, harsh sulfates, methylisothiazolinone and "
+        "high alcohol. Reward ceramides, colloidal oatmeal, petrolatum, shea butter, glycerin and panthenol.",
+    "Rosacea-prone":
+        "Flag fragrance, alcohol, menthol, camphor, peppermint/eucalyptus, witch hazel and strong exfoliants; some "
+        "chemical sunscreen filters (avobenzone, oxybenzone) can sting. Reward azelaic acid, niacinamide, zinc oxide "
+        "mineral sunscreen, ceramides and centella.",
+    "Signs of aging":
+        "Reward vitamin C (ascorbic acid and derivatives), retinoids (retinol, retinal) or bakuchiol, peptides, "
+        "niacinamide and broad-spectrum sunscreen. Note that retinoids and vitamin C can irritate sensitive skin.",
+    "Dark spots":
+        "Reward vitamin C, niacinamide, azelaic acid, tranexamic acid, alpha arbutin, licorice root extract and daily "
+        "sunscreen. Flag irritants that can worsen post-inflammatory marks.",
+}
+
+
+# ---------------------------------------------------------------------------
+# 2. The exact JSON structure Gemini must return.
 #    Every r.something used in app.py must exist here.
+# ---------------------------------------------------------------------------
+
 class IngredientFlag(BaseModel):
     ingredient: str = Field(description="Ingredient name, written exactly as it appears in all_ingredients")
-    pathway: str = Field(description="e.g., Hormonal/IGF-1, Gut Inflammation, Pore-Clogging, or High Glycemic")
-    explanation: str = Field(description="Calm, biological explanation of why this affects the user's goal")
+    pathway: str = Field(description="Short label, e.g. Hormonal/IGF-1, Gut Inflammation, High Glycemic, "
+                                     "Pore-Clogging, Irritation/Fragrance, Barrier-Drying")
+    explanation: str = Field(description="Calm, biological explanation of why this may affect the user's goals")
+    matters_most_for: str = Field(description="Who this matters most for, e.g. 'oily or acne-prone skin' or "
+                                              "'anyone managing blood sugar'. Mention if it is fine or even helpful "
+                                              "for other profiles")
 
 
 class SupportiveWin(BaseModel):
     ingredient: str = Field(description="Ingredient name, written exactly as it appears in all_ingredients")
-    benefit: str = Field(description="How this supports skin barrier, gut health, blood sugar, or muscle growth")
+    benefit: str = Field(description="How this supports the user's goals: skin barrier, hydration, calming, "
+                                     "gut health, blood sugar, muscle growth, etc.")
+
+
+class Swap(BaseModel):
+    instead_of: str = Field(description="The ingredient or product quality this swap addresses, "
+                                        "e.g. 'coconut oil base' or 'brown rice syrup'")
+    look_for: str = Field(description="An ingredient profile to look for instead. Never a brand or product name")
+    why: str = Field(description="One sentence on why this fits the user's profile")
 
 
 class ProductAnalysis(BaseModel):
-    product_name: str = Field(description="Short product name from the package, e.g. 'Chocolate Peanut Protein Bar'. If not visible, describe the product in 2-4 words")
-    product_type: str = Field(description="Food/Beverage or Skincare/Cosmetic")
-    all_ingredients: list[str] = Field(description="Every ingredient on the label, in label order, using short clean names, no duplicates")
-    alignment_score: int = Field(description="0 to 100 score strictly tailored to the user's active profile")
-    verdict_headline: str = Field(description="Short, empowering 1-sentence summary without food shaming")
+    product_name: str = Field(description="Short product name from the package, e.g. 'Chocolate Peanut Protein Bar'. "
+                                          "If not visible, describe the product in 2-4 words")
+    product_type: str = Field(description="Exactly 'Food/Beverage' or 'Skincare/Cosmetic'")
+    all_ingredients: list[str] = Field(description="Every ingredient on the label, in label order, using short clean "
+                                                   "names, no duplicates")
+    alignment_score: int = Field(description="0 to 100 score for the profile that matches the product type")
+    verdict_headline: str = Field(description="Short, empowering 1-sentence summary without shaming")
     triggers: list[IngredientFlag]
     supportive_wins: list[SupportiveWin]
-    non_restrictive_tip: str = Field(description="Practical pairing tip or cleaner swap without rigid fear-mongering")
+    swaps: list[Swap] = Field(description="1 to 3 swaps tailored to the user's profile; empty if already a great fit")
+    non_restrictive_tip: str = Field(description="Practical pairing, layering or usage tip without fear-mongering")
 
 
-# 2. Function that sends the image + user goals to Gemini
-def analyze_label(image: Image.Image, selected_goals: list[str], custom_rules: str) -> ProductAnalysis:
+# ---------------------------------------------------------------------------
+# 3. Instructions for Gemini
+# ---------------------------------------------------------------------------
+
+def _section(title, guide):
+    return title + "\n" + "\n".join(f"  * {name}: {rule}" for name, rule in guide.items())
+
+
+SYSTEM_PROMPT = f"""
+You are NourishLens, a root-cause nutrition and skin health analyst.
+
+Philosophy:
+- Skin issues are signals (internal and topical), not something solved by fear. Never use shaming words like
+  'toxic', 'poison' or 'bad'. Explain pathways calmly, using words like "may" and "can".
+- Context over verdicts: the same ingredient can be a problem for one person and helpful for another (shea butter
+  may clog pores on oily, acne-prone skin yet repair a dry barrier). Always say who a flag matters most for.
+- Ingredients are listed roughly by amount, so those near the top matter more than trace ingredients at the end.
+
+Steps:
+1. Decide product_type: 'Food/Beverage' or 'Skincare/Cosmetic'.
+2. List EVERY ingredient in all_ingredients, then use those exact names in triggers and supportive_wins.
+3. Score ONLY against the part of the profile that matches the product type: food goals for food, skin type and
+   skin concerns for skincare. If that part is empty, score for general balanced wellness (food) or general skin
+   health (skincare). Custom filters apply to both.
+4. Look for BOTH triggers and supportive ingredients.
+5. Suggest swaps as ingredient profiles to look for (e.g. "a zinc oxide mineral sunscreen with an oil-free gel
+   base"), tailored to the user's profile. Never name brands or specific products.
+
+{_section("FOOD GOALS", FOOD_GUIDE)}
+
+{_section("SKIN TYPES", SKIN_TYPE_GUIDE)}
+
+{_section("SKIN CONCERNS", SKIN_CONCERN_GUIDE)}
+"""
+
+
+# ---------------------------------------------------------------------------
+# 4. Send the image + profile to Gemini
+# ---------------------------------------------------------------------------
+
+def analyze_label(image: Image.Image, food_goals: list[str], skin_type: str | None,
+                  skin_concerns: list[str], custom_rules: str) -> ProductAnalysis:
     # Resize large phone photos so uploads stay fast
     img_copy = image.copy()
     if img_copy.mode in ("RGBA", "P"):
@@ -47,25 +170,12 @@ def analyze_label(image: Image.Image, selected_goals: list[str], custom_rules: s
         http_options=types.HttpOptions(timeout=12000),
     )
 
-    system_prompt = """
-    You are NourishLens, a root-cause nutrition and skin health analyst.
-    Philosophy:
-    - Acne is an internal signal (gut dysbiosis, insulin/IGF-1 spikes, inflammation, nutrient gaps), NOT something solved by rigid food fear.
-    - Never use shaming words like 'toxic', 'poison', or 'bad food'. Explain biological pathways calmly, using words like "may" and "can".
-    - First, list EVERY ingredient on the label in all_ingredients. Then use those exact same names in triggers and supportive_wins.
-    - Thoroughly read EVERY ingredient on the label:
-      * For Acne (Hormonal/Insulin or Gut/Inflammation): Flag dairy/whey/casein (IGF-1/insulin spike), refined sugars/syrups (high glycemic load), and refined omega-6 seed oils (sunflower oil, safflower oil, canola oil, soybean oil, vegetable oil — inflammatory pathways), plus emulsifiers/artificial sweeteners.
-      * For Acne (Topical/Skincare): Flag comedogenic/pore-clogging ingredients (coconut oil, isopropyl myristate, cocoa butter, heavy waxes, pore-clogging esters).
-      * For Bulking: Reward bioavailable protein, healthy fats, and calorie density; do NOT penalize calories or whey unless Acne is also selected.
-      * For Blood Sugar / Weight Loss: Flag added sugars, refined starches, and calorie-dense oils when aligned with the goal.
-    - Always look for BOTH potential triggers AND supportive nutrients/ingredients (zinc, omega-3s, fiber, ceramides, protein).
-    - Provide an actionable, non-restrictive pairing tip or swap.
-    """
-
     user_prompt = f"""
-    Analyze this product label thoroughly for a user with these active goals:
-    - Selected Profiles: {', '.join(selected_goals) if selected_goals else 'General Balanced Wellness'}
-    - Custom Filters/Notes: {custom_rules or 'None'}
+    Analyze this product label for a user with this profile:
+    - Food goals: {', '.join(food_goals) if food_goals else 'None selected'}
+    - Skin type: {skin_type or 'Not set'}
+    - Skin concerns: {', '.join(skin_concerns) if skin_concerns else 'None selected'}
+    - Custom filters/notes: {custom_rules or 'None'}
     """
 
     # Try the stronger model first, then fall back if it's busy
@@ -75,7 +185,7 @@ def analyze_label(image: Image.Image, selected_goals: list[str], custom_rules: s
                 model=model_name,
                 contents=[img_copy, user_prompt],
                 config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
+                    system_instruction=SYSTEM_PROMPT,
                     response_mime_type="application/json",
                     response_schema=ProductAnalysis,
                 ),

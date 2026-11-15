@@ -16,14 +16,17 @@ WARN, WARN_BG = "#C2621A", "#FDE8D7"
 GOOD, GOOD_BG = "#4F6340", "#E2ECD8"
 NEUTRAL, NEUTRAL_BG = "#55555C", "rgba(255,255,255,0.75)"
 
-GOALS = {
+# Chip label -> what the analyzer sees (keys in analyzer.FOOD_GUIDE)
+FOOD_GOALS = {
     "Hormonal acne": "Acne: Hormonal & Insulin Pathways",
     "Gut & inflammation": "Acne: Gut & Inflammation",
-    "Skin barrier": "Acne: Topical Skin Barrier (Skincare)",
     "Blood sugar": "Blood Sugar Balance",
     "Lean bulk": "Athletic: Lean Bulk (High Protein/Calories)",
     "Weight loss": "Weight Loss / Calorie Deficit",
 }
+# Must match the keys in analyzer.SKIN_TYPE_GUIDE and analyzer.SKIN_CONCERN_GUIDE
+SKIN_TYPES = ["Oily", "Dry", "Combination", "Normal"]
+SKIN_CONCERNS = ["Acne-prone", "Sensitive", "Eczema-prone", "Rosacea-prone", "Signs of aging", "Dark spots"]
 
 st.markdown(f"""
 <style>
@@ -88,6 +91,14 @@ button[data-variant="segmented_control"] {{ border: none !important; background:
 button[data-variant="segmented_control"][aria-checked="true"] {{ background: white !important; color: {INK} !important;
   box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
 
+/* Food / Skin tabs */
+.stTabs [data-baseweb="tab-list"] {{ gap: 18px; }}
+.stTabs [data-baseweb="tab"] p {{ font-weight: 600; font-size: 1rem; }}
+.stTabs [aria-selected="true"] p {{ color: {ACCENT} !important; }}
+.stTabs [data-baseweb="tab-highlight"] {{ background-color: {ACCENT} !important; }}
+.nl-mini {{ font-size: .74rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; opacity: .5; margin: 4px 0 -4px; }}
+.nl-route {{ font-size: .85rem; opacity: .6; margin-top: 10px; line-height: 1.4; }}
+
 /* Goal chips */
 button[data-variant="pills"] {{ border-radius: 999px !important; padding: 8px 16px !important;
   background: rgba(255,255,255,0.7) !important; border: 1px solid rgba(255,255,255,0.9) !important; color: {INK} !important; }}
@@ -133,6 +144,10 @@ button {{ border-radius: 12px !important; }}
 .nl-product img {{ width: 58px; height: 58px; object-fit: cover; border-radius: 12px; border: 1px solid rgba(0,0,0,.08); }}
 .nl-product-name {{ font-weight: 400; font-size: 1.45rem; }}
 .nl-product-meta {{ font-size: .82rem; opacity: .55; margin-top: 2px; }}
+.nl-scored {{ display: inline-block; margin-top: 6px; font-size: .78rem; font-weight: 600; color: {ACCENT};
+  background: {GOOD_BG}; padding: 3px 10px; border-radius: 999px; }}
+.nl-hint {{ border-radius: 14px; padding: 10px 14px; margin-top: 12px; font-size: .9rem; line-height: 1.4;
+  background: rgba(255,255,255,0.8); border: 1px dashed rgba(79,99,64,0.4); }}
 .nl-status {{ text-align: center; font-weight: 400; font-size: 2.1rem; letter-spacing: -.01em; margin-top: 6px; }}
 .nl-verdict {{ text-align: center; opacity: .68; margin: 4px auto 6px; max-width: 420px; line-height: 1.45; }}
 .nl-sec {{ font-size: .76rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .5; margin: 18px 0 2px; }}
@@ -144,6 +159,12 @@ button {{ border-radius: 12px !important; }}
 .nl-detail-title {{ font-weight: 700; }}
 .nl-badge {{ font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; margin-left: 8px; vertical-align: 2px; }}
 .nl-detail-body {{ opacity: .75; margin-top: 4px; line-height: 1.45; }}
+.nl-detail-for {{ margin-top: 8px; font-size: .86rem; line-height: 1.4; }}
+.nl-detail-for b {{ color: {WARN}; }}
+.nl-swap {{ border-radius: 16px; padding: 12px 16px; margin-top: 8px; background: rgba(255,255,255,0.8); line-height: 1.45; }}
+.nl-swap-top {{ font-size: .82rem; opacity: .6; }}
+.nl-swap-look {{ font-weight: 700; color: {ACCENT}; margin-top: 2px; }}
+.nl-swap-why {{ opacity: .75; font-size: .92rem; margin-top: 2px; }}
 .nl-tip {{ border-radius: 16px; padding: 14px 16px; margin-top: 16px; line-height: 1.45;
   background: linear-gradient(135deg, rgba(226,236,216,0.95), rgba(239,243,233,0.95)); }}
 .nl-empty {{ text-align: center; padding: 6px 16px 12px; }}
@@ -156,6 +177,7 @@ button {{ border-radius: 12px !important; }}
 .nl-win {{ position: absolute; top: -13px; left: 50%; transform: translateX(-50%); background: {ACCENT}; color: white;
   font-size: .75rem; font-weight: 700; padding: 4px 12px; border-radius: 999px; white-space: nowrap; }}
 .nl-cmp-name {{ font-weight: 400; font-size: 1.25rem; margin-top: 6px; }}
+.nl-cmp-type {{ font-size: .78rem; opacity: .55; margin-top: 2px; }}
 .nl-cmp-row {{ font-size: .88rem; margin-top: 6px; }}
 .nl-why {{ margin-top: 16px; border-radius: 16px; padding: 14px 16px; background: rgba(255,255,255,0.8); line-height: 1.5; }}
 </style>
@@ -223,6 +245,28 @@ def win_sentence(w):
     return f'{top.ingredient} adds {top.benefit[0].lower() + top.benefit[1:]}'
 
 
+def is_skincare(r):
+    t = r.product_type.lower()
+    return "skin" in t or "cosmetic" in t
+
+
+def scored_for(profile, skin):
+    """What the score was measured against, e.g. 'Dry skin, Sensitive' or 'Hormonal acne, Blood sugar'."""
+    if skin:
+        parts = ([f"{profile['skin_type']} skin"] if profile["skin_type"] else []) + profile["concerns"]
+        return ", ".join(parts)
+    return ", ".join(profile["food"])
+
+
+def swaps_html(r):
+    if not r.swaps:
+        return ""
+    cards = "".join(f'<div class="nl-swap"><div class="nl-swap-top">Instead of {s.instead_of}</div>'
+                    f'<div class="nl-swap-look">→ {s.look_for}</div><div class="nl-swap-why">{s.why}</div></div>'
+                    for s in r.swaps)
+    return '<div class="nl-sec">Better matches to look for</div>' + cards
+
+
 # ---------- Hero ----------
 st.markdown('<div class="nl-hero-title">Know what\'s <span class="nl-grad">in it.</span></div>'
             '<div class="nl-hero-sub">Snap any food or skincare label. See how every ingredient fits your goals.</div>',
@@ -237,11 +281,23 @@ with left:
     with st.container(key="card_goals"):
         st.markdown('<div class="nl-step" id="goals">Step 1</div>', unsafe_allow_html=True)
         st.subheader("What are you working on?", anchor=False)
-        picked = st.pills("Goals", list(GOALS), selection_mode="multi", default=["Hormonal acne"],
-                          label_visibility="collapsed")
-        selected_goals = [GOALS[p] for p in picked or []]
+        food_tab, skin_tab = st.tabs(["🥗  Food goals", "🧴  Skin profile"])
+        with food_tab:
+            picked = st.pills("Food goals", list(FOOD_GOALS), selection_mode="multi", default=["Hormonal acne"],
+                              label_visibility="collapsed") or []
+        with skin_tab:
+            st.markdown('<div class="nl-mini">Skin type</div>', unsafe_allow_html=True)
+            skin_type = st.pills("Skin type", SKIN_TYPES, selection_mode="single", label_visibility="collapsed")
+            st.markdown('<div class="nl-mini">Concerns</div>', unsafe_allow_html=True)
+            skin_concerns = st.pills("Skin concerns", SKIN_CONCERNS, selection_mode="multi",
+                                     label_visibility="collapsed") or []
+        st.markdown('<div class="nl-route">Food is scored against your food goals, skincare against your skin profile. '
+                    'NourishLens figures out which one it is from the label.</div>', unsafe_allow_html=True)
         with st.expander("Add custom filters"):
-            custom_rules = st.text_input("Anything specific to flag", placeholder="e.g. whey, coconut oil, seed oils")
+            custom_rules = st.text_input("Anything specific to flag", placeholder="e.g. whey, coconut oil, fragrance")
+
+        food_goals = [FOOD_GOALS[p] for p in picked]
+        profile = {"food": list(picked), "skin_type": skin_type, "concerns": list(skin_concerns)}
 
     with st.container(key="card_label"):
         st.markdown('<div class="nl-step" id="scan">Step 2</div>', unsafe_allow_html=True)
@@ -275,13 +331,15 @@ with right:
     with st.container(key="card_results"):
         st.markdown('<div class="nl-step" id="results">Your results</div>', unsafe_allow_html=True)
         run = st.session_state.pop("run", None)
+        args = (food_goals, skin_type, skin_concerns, custom_rules)
 
         if run == "single":
             ph = st.empty()
             ph.markdown(scanning(st.session_state.img, "Reading the ingredients…"), unsafe_allow_html=True)
             try:
-                st.session_state.result = analyze_label(st.session_state.img, selected_goals, custom_rules)
+                st.session_state.result = analyze_label(st.session_state.img, *args)
                 st.session_state.thumb = to_b64(st.session_state.img, 160)
+                st.session_state.result_profile = profile  # remember what this result was scored for
             except Exception:
                 st.error("Couldn't analyze this label. Try again, or use a sharper photo.")
             ph.empty()
@@ -291,8 +349,8 @@ with right:
             ph.markdown(f'<div style="display:flex;gap:12px">{scanning(ia, "Reading A…")}{scanning(ib, "Reading B…")}</div>',
                         unsafe_allow_html=True)
             try:
-                st.session_state.cmp = (analyze_label(ia, selected_goals, custom_rules),
-                                        analyze_label(ib, selected_goals, custom_rules))
+                st.session_state.cmp = (analyze_label(ia, *args), analyze_label(ib, *args))
+                st.session_state.cmp_profile = profile
             except Exception:
                 st.error("Couldn't analyze these labels. Try again, or use sharper photos.")
             ph.empty()
@@ -301,16 +359,27 @@ with right:
         cmp = st.session_state.get("cmp")
 
         if mode == "Single scan" and r:
+            prof = st.session_state.get("result_profile", profile)
+            skin = is_skincare(r)
+            target = scored_for(prof, skin)
+
             # Remove duplicate ingredient names (duplicates would break the tappable tags)
             ingredients = list(dict.fromkeys(i for i in r.all_ingredients if i.strip()))
             kinds = {name: kind_of(r, name) for name in ingredients}
             n_neutral = sum(1 for k in kinds.values() if k == "neutral")
 
+            scored_chip = (f'<div class="nl-scored">Scored for: {target}</div>' if target else
+                           f'<div class="nl-scored">Scored for: general {"skin health" if skin else "wellness"}</div>')
             st.markdown(
                 f'<div class="nl-product"><img src="{st.session_state.thumb}"><div>'
                 f'<div class="nl-product-name">{r.product_name}</div>'
-                f'<div class="nl-product-meta">{r.product_type} · {len(ingredients)} ingredients · Scanned just now</div>'
-                f'</div></div><div style="height:18px"></div>'
+                f'<div class="nl-product-meta">{r.product_type} · {len(ingredients)} ingredients</div>'
+                f'{scored_chip}</div></div>'
+                + ('' if target else
+                   f'<div class="nl-hint">Want a personal score? Set your '
+                   f'{"skin type and concerns under <b>Skin profile</b>" if skin else "<b>Food goals</b>"} '
+                   f'in Step 1, then analyze again.</div>')
+                + '<div style="height:18px"></div>'
                 + ring(r.alignment_score, 180, "single")
                 + f'<div class="nl-status">{status(r.alignment_score)}</div><div class="nl-verdict">{r.verdict_headline}</div>'
                 + f'<div class="nl-stats">'
@@ -338,18 +407,22 @@ with right:
 
             if chosen:
                 k = kinds.get(chosen, "neutral")
+                extra = ""
                 if k == "warn":
                     t = next(t for t in r.triggers if same(t.ingredient, chosen))
                     color, badge, body = WARN, f'<span class="nl-badge" style="background:{WARN_BG};color:{WARN}">{t.pathway}</span>', t.explanation
+                    if t.matters_most_for:
+                        extra = f'<div class="nl-detail-for"><b>Matters most for:</b> {t.matters_most_for}</div>'
                 elif k == "good":
                     w = next(w for w in r.supportive_wins if same(w.ingredient, chosen))
                     color, badge, body = GOOD, f'<span class="nl-badge" style="background:{GOOD_BG};color:{GOOD}">Supports you</span>', w.benefit
                 else:
                     color, badge, body = "#B9B9BE", "", "Nothing to note for your goals."
                 st.markdown(f'<div class="nl-detail" style="border-color:{color}"><div class="nl-detail-title">{chosen}{badge}</div>'
-                            f'<div class="nl-detail-body">{body}</div></div>', unsafe_allow_html=True)
+                            f'<div class="nl-detail-body">{body}</div>{extra}</div>', unsafe_allow_html=True)
 
-            st.markdown(f'<div class="nl-tip">💡 <b>Try this:</b> {r.non_restrictive_tip}</div>', unsafe_allow_html=True)
+            st.markdown(swaps_html(r) + f'<div class="nl-tip">💡 <b>Try this:</b> {r.non_restrictive_tip}</div>',
+                        unsafe_allow_html=True)
 
         elif mode == "Compare two" and cmp:
             ra, rb = cmp
@@ -360,17 +433,23 @@ with right:
                 cols += (f'<div class="nl-cmp-col {"win" if idx == win else ""}">{badge}'
                          + ring(rr.alignment_score, 130, f"c{idx}")
                          + f'<div class="nl-cmp-name">{lab} · {rr.product_name}</div>'
+                           f'<div class="nl-cmp-type">{rr.product_type}</div>'
                            f'<div class="nl-cmp-row" style="color:{WARN}">● {len(rr.triggers)} worth knowing</div>'
                            f'<div class="nl-cmp-row" style="color:{GOOD}">● {len(rr.supportive_wins)} working for you</div></div>')
             w, l = (ra, rb) if win == 0 else (rb, ra)
+            mixed = is_skincare(ra) != is_skincare(rb)
+            note = ('<div class="nl-hint">Heads up: one of these is food and one is skincare, so each was scored '
+                    'against a different part of your profile. Compare two of the same kind for a fairer match-up.</div>'
+                    if mixed else "")
             st.markdown(
-                f'<div class="nl-cmp">{cols}</div>'
+                f'<div class="nl-cmp">{cols}</div>{note}'
                 f'<div class="nl-why"><b>Why {w.product_name} wins:</b> {len(w.triggers)} flagged vs {len(l.triggers)}, and '
                 f'{len(w.supportive_wins)} ingredients working for you vs {len(l.supportive_wins)}. '
                 f'{win_sentence(w)}</div>'
-                f'<div class="nl-tip">💡 <b>Try this:</b> {w.non_restrictive_tip}</div>',
+                + swaps_html(l)
+                + f'<div class="nl-tip">💡 <b>Try this:</b> {w.non_restrictive_tip}</div>',
                 unsafe_allow_html=True)
         else:
-            hint = "Add two labels, then tap Compare." if mode == "Compare two" else "Pick your goals, add a label, then tap Analyze."
+            hint = "Add two labels, then tap Compare." if mode == "Compare two" else "Set your goals, add a label, then tap Analyze."
             st.markdown(ring(None, 170) + f'<div class="nl-empty" style="margin-top:14px"><b>Your results will appear here</b><br>'
                         f'<span style="opacity:.6">{hint}</span></div>', unsafe_allow_html=True)
